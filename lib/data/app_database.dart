@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../models/user_profile.dart';
+import '../models/period_entry.dart';
 
 class AppDatabase {
   AppDatabase._(this._database);
@@ -12,7 +13,7 @@ class AppDatabase {
     final root = await getDatabasesPath();
     final database = await openDatabase(
       p.join(root, 'cycle_compass.db'),
-      version: 1,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE profile (
@@ -22,7 +23,13 @@ class AppDatabase {
             avatar_path TEXT,
             last_period_start TEXT NOT NULL,
             cycle_length INTEGER NOT NULL,
-            period_length INTEGER NOT NULL
+            period_length INTEGER NOT NULL,
+            is_pregnant INTEGER NOT NULL DEFAULT 0,
+            pregnancy_started_on TEXT,
+            due_date TEXT,
+            next_period_due_date TEXT,
+            postpartum_started_on TEXT,
+            postpartum_ended_on TEXT
           )
         ''');
         await db.execute('''
@@ -43,6 +50,30 @@ class AppDatabase {
             note TEXT
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN is_pregnant INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN pregnancy_started_on TEXT',
+          );
+          await db.execute('ALTER TABLE profile ADD COLUMN due_date TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN next_period_due_date TEXT',
+          );
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN postpartum_started_on TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN postpartum_ended_on TEXT',
+          );
+        }
       },
     );
     return AppDatabase._(database);
@@ -73,14 +104,66 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
-  Future<List<DateTime>> readPeriodStarts() async {
+  Future<void> updatePeriodStart(DateTime oldDate, DateTime newDate) async {
+    await _database.transaction((transaction) async {
+      final existing = await transaction.query(
+        'period_entries',
+        columns: ['end_date'],
+        where: 'start_date = ?',
+        whereArgs: [_dateOnly(oldDate)],
+        limit: 1,
+      );
+      final oldEnd = existing.isEmpty
+          ? null
+          : existing.first['end_date'] as String?;
+      final parsedEnd = oldEnd == null ? null : DateTime.parse(oldEnd);
+      await transaction.delete(
+        'period_entries',
+        where: 'start_date = ?',
+        whereArgs: [_dateOnly(oldDate)],
+      );
+      await transaction.insert('period_entries', {
+        'start_date': _dateOnly(newDate),
+        'end_date': parsedEnd != null && !parsedEnd.isBefore(newDate)
+            ? _dateOnly(parsedEnd)
+            : null,
+        'source': 'user',
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    });
+  }
+
+  Future<void> updatePeriodEnd(DateTime startDate, DateTime? endDate) async {
+    await _database.update(
+      'period_entries',
+      {'end_date': endDate == null ? null : _dateOnly(endDate)},
+      where: 'start_date = ?',
+      whereArgs: [_dateOnly(startDate)],
+    );
+  }
+
+  Future<void> deletePeriodStart(DateTime date) async {
+    await _database.delete(
+      'period_entries',
+      where: 'start_date = ?',
+      whereArgs: [_dateOnly(date)],
+    );
+  }
+
+  Future<List<PeriodEntry>> readPeriodEntries() async {
     final rows = await _database.query(
       'period_entries',
-      columns: ['start_date'],
+      columns: ['start_date', 'end_date'],
       orderBy: 'start_date DESC',
     );
     return rows
-        .map((row) => DateTime.parse(row['start_date']! as String))
+        .map(
+          (row) => PeriodEntry(
+            startDate: DateTime.parse(row['start_date']! as String),
+            endDate: row['end_date'] == null
+                ? null
+                : DateTime.parse(row['end_date']! as String),
+          ),
+        )
         .toList(growable: false);
   }
 

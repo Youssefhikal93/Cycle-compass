@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
 import '../models/user_profile.dart';
+import '../models/period_entry.dart';
+import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
 class ProfileScreen extends StatelessWidget {
@@ -15,6 +17,12 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final profile = controller.profile!;
+    final latestEntry = controller.periodEntries.first;
+    final isPostpartum = profile.isPostpartumOn(DateTime.now());
+    final historyLength = const CycleCalculator().estimatedCycleLength(
+      periodStarts: controller.periodStarts,
+      configuredLength: profile.cycleLength,
+    );
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
@@ -76,7 +84,9 @@ class ProfileScreen extends StatelessWidget {
               _SettingTile(
                 icon: Icons.sync_rounded,
                 label: 'Usual cycle length',
-                value: '${profile.cycleLength} days',
+                value: controller.periodStarts.length > 1
+                    ? '${profile.cycleLength} days · fallback; history estimate $historyLength'
+                    : '${profile.cycleLength} days · used until more dates are added',
                 onTap: () => _openEditor(context, profile),
               ),
               _SettingTile(
@@ -86,50 +96,110 @@ class ProfileScreen extends StatelessWidget {
                 onTap: () => _openEditor(context, profile),
               ),
               _SettingTile(
+                icon: Icons.event_available_outlined,
+                label: 'Next period due date',
+                value: profile.isPregnant
+                    ? isPostpartum
+                          ? 'Paused until the first postpartum period'
+                          : 'Paused during pregnancy'
+                    : profile.nextPeriodDueDate == null
+                    ? 'Automatic estimate · tap to set a date'
+                    : '${DateFormat.yMMMMd().format(profile.nextPeriodDueDate!)} · set by you',
+                onTap: profile.isPregnant
+                    ? null
+                    : () => _editNextPeriodDueDate(context, profile),
+              ),
+              _SettingTile(
                 icon: Icons.event_outlined,
                 label: 'Latest period start',
-                value: DateFormat.yMMMd().format(profile.lastPeriodStart),
-                onTap: null,
+                value: _periodEntryLabel(latestEntry),
+                onTap: () => _editPeriodDate(context, latestEntry),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0F7F4),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.shield_outlined, color: Color(0xFF26715A)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Private by design',
-                        style: TextStyle(
-                          color: Color(0xFF225B49),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        'Your profile and cycle history are stored only on this device. Android cloud backup is disabled.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF3A6758),
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
+          _SettingsGroup(
+            title: 'Pregnancy & postpartum',
+            children: [
+              _SettingTile(
+                icon: profile.isPregnant
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                label: 'Current mode',
+                value: isPostpartum
+                    ? 'Postpartum · waiting for the first period'
+                    : profile.isPregnant
+                    ? profile.dueDate == null
+                          ? 'Pregnancy · cycle estimates paused'
+                          : 'Pregnancy · due ${DateFormat.yMMMd().format(profile.dueDate!)}'
+                    : 'Period tracking · pregnancy mode is off',
+                onTap: () => _openPregnancySettings(context, profile),
+              ),
+              if (profile.isPregnant && profile.dueDate != null)
+                _SettingTile(
+                  icon: Icons.event_outlined,
+                  label: isPostpartum
+                      ? 'Postpartum started'
+                      : 'Expected due date',
+                  value: DateFormat.yMMMMd().format(profile.dueDate!),
+                  onTap: isPostpartum
+                      ? null
+                      : () => _openPregnancySettings(context, profile),
                 ),
-              ],
-            ),
+              if (profile.postpartumStartedOn != null &&
+                  profile.postpartumEndedOn != null)
+                _SettingTile(
+                  icon: Icons.history_rounded,
+                  label: 'Last postpartum tracking',
+                  value:
+                      '${DateFormat.yMMMd().format(profile.postpartumStartedOn!)} – '
+                      '${DateFormat.yMMMd().format(profile.postpartumEndedOn!)} · '
+                      'ended with first period',
+                  onTap: null,
+                ),
+            ],
           ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
+            title: 'Period history',
+            children: [
+              for (final entry in controller.periodEntries.take(6))
+                _SettingTile(
+                  icon: Icons.water_drop_outlined,
+                  label:
+                      DateUtils.isSameDay(
+                        entry.startDate,
+                        profile.lastPeriodStart,
+                      )
+                      ? 'Latest period'
+                      : 'Earlier period',
+                  value: _periodEntryLabel(entry),
+                  onTap: () => _editPeriodDate(context, entry),
+                ),
+              ListTile(
+                leading: const Icon(Icons.add_circle_outline_rounded),
+                title: Text(
+                  isPostpartum
+                      ? 'Log first postpartum period'
+                      : 'Add a period date',
+                ),
+                subtitle: Text(
+                  profile.isPregnant && !isPostpartum
+                      ? 'Available automatically from the expected due date'
+                      : isPostpartum
+                      ? 'This ends postpartum mode and starts a new cycle'
+                      : 'Choose any previous start day',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                enabled: !profile.isPregnant || isPostpartum,
+                onTap: profile.isPregnant && !isPostpartum
+                    ? null
+                    : () => _addPeriodDate(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const _PrivacyGroup(),
           const SizedBox(height: 22),
           OutlinedButton.icon(
             onPressed: () => _confirmReset(context, profile),
@@ -145,16 +215,7 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Future<void> _updateAvatar(UserProfile profile, String? path) async {
-    await controller.updateProfile(
-      UserProfile(
-        name: profile.name,
-        dateOfBirth: profile.dateOfBirth,
-        avatarPath: path,
-        lastPeriodStart: profile.lastPeriodStart,
-        cycleLength: profile.cycleLength,
-        periodLength: profile.periodLength,
-      ),
-    );
+    await controller.updateProfile(profile.copyWith(avatarPath: path));
   }
 
   Future<void> _openEditor(BuildContext context, UserProfile profile) async {
@@ -165,6 +226,270 @@ class ProfileScreen extends StatelessWidget {
       builder: (context) => _EditProfileSheet(profile: profile),
     );
     if (updated != null) await controller.updateProfile(updated);
+  }
+
+  Future<void> _addPeriodDate(BuildContext context) async {
+    final now = DateTime.now();
+    final profile = controller.profile!;
+    final isPostpartum = profile.isPostpartumOn(now);
+    final earliest = isPostpartum ? profile.dueDate! : DateTime(1900);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: earliest,
+      lastDate: now,
+      helpText: isPostpartum
+          ? 'First period after pregnancy'
+          : 'Choose the first day of the period',
+    );
+    if (picked == null) return;
+    await controller.logPeriodStart(picked);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isPostpartum
+              ? 'Postpartum tracking ended on ${DateFormat.yMMMd().format(picked)}. Cycle tracking resumed.'
+              : 'Period start added for ${DateFormat.yMMMd().format(picked)}.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editNextPeriodDueDate(
+    BuildContext context,
+    UserProfile profile,
+  ) async {
+    final action = await showModalBottomSheet<_DueDateAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('Next period due date'),
+              subtitle: Text(
+                profile.nextPeriodDueDate == null
+                    ? 'Add the date you currently expect your period to start.'
+                    : 'Currently ${DateFormat.yMMMMd().format(profile.nextPeriodDueDate!)}',
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_calendar_outlined),
+              title: Text(
+                profile.nextPeriodDueDate == null
+                    ? 'Set expected date'
+                    : 'Change expected date',
+              ),
+              onTap: () => Navigator.pop(sheetContext, _DueDateAction.edit),
+            ),
+            if (profile.nextPeriodDueDate != null)
+              ListTile(
+                leading: const Icon(Icons.auto_awesome_outlined),
+                title: const Text('Use automatic estimate'),
+                subtitle: const Text('Remove the date you entered'),
+                onTap: () => Navigator.pop(sheetContext, _DueDateAction.clear),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || action == null) return;
+    if (action == _DueDateAction.clear) {
+      await controller.setNextPeriodDueDate(null);
+      return;
+    }
+    final today = DateTime.now();
+    final firstDate = profile.lastPeriodStart.add(const Duration(days: 1));
+    final automatic = const CycleCalculator()
+        .calculate(
+          onDate: today,
+          lastPeriodStart: profile.lastPeriodStart,
+          cycleLength: profile.cycleLength,
+          periodLength: profile.periodLength,
+          periodStarts: controller.periodStarts,
+        )
+        .nextPeriod;
+    final initial = profile.nextPeriodDueDate ?? automatic;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial.isBefore(firstDate) ? firstDate : initial,
+      firstDate: firstDate,
+      lastDate: today.add(const Duration(days: 365)),
+      helpText: 'Expected next period start',
+    );
+    if (picked != null) await controller.setNextPeriodDueDate(picked);
+  }
+
+  String _periodEntryLabel(PeriodEntry entry) {
+    final start = DateFormat.yMMMd().format(entry.startDate);
+    final end = entry.endDate;
+    if (end == null) return '$start · last day not recorded';
+    final duration = entry.durationDays!;
+    return '$start – ${DateFormat.yMMMd().format(end)} · $duration ${duration == 1 ? 'day' : 'days'}';
+  }
+
+  Future<void> _editPeriodDate(BuildContext context, PeriodEntry entry) async {
+    final date = entry.startDate;
+    final usualLength = controller.profile!.periodLength;
+    final today = DateTime.now();
+    final effectiveEnd =
+        entry.endDate ?? date.add(Duration(days: usualLength - 1));
+    final extraDay = effectiveEnd.add(const Duration(days: 1));
+    final canAddDay = !extraDay.isAfter(today);
+    final action = await showModalBottomSheet<_PeriodAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                DateFormat.yMMMMd().format(date),
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                entry.endDate == null
+                    ? 'Start recorded. Add the last bleeding day to replace the usual $usualLength-day estimate.'
+                    : '${entry.durationDays} bleeding ${entry.durationDays == 1 ? 'day' : 'days'} recorded.',
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.edit_calendar_outlined),
+                title: const Text('Change date'),
+                onTap: () => Navigator.pop(sheetContext, _PeriodAction.edit),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.date_range_outlined),
+                title: Text(
+                  entry.endDate == null
+                      ? 'Set last bleeding day'
+                      : 'Change last bleeding day',
+                ),
+                subtitle: entry.endDate == null
+                    ? null
+                    : Text(DateFormat.yMMMMd().format(entry.endDate!)),
+                onTap: () => Navigator.pop(sheetContext, _PeriodAction.editEnd),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                enabled: canAddDay,
+                leading: const Icon(Icons.add_circle_outline_rounded),
+                title: const Text('Add one more day'),
+                subtitle: Text(
+                  canAddDay
+                      ? 'Last day becomes ${DateFormat.yMMMd().format(extraDay)}'
+                      : 'The next day is in the future',
+                ),
+                onTap: canAddDay
+                    ? () => Navigator.pop(sheetContext, _PeriodAction.addDay)
+                    : null,
+              ),
+              if (entry.endDate != null && entry.endDate!.isAfter(date))
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.remove_circle_outline_rounded),
+                  title: const Text('Remove one day'),
+                  subtitle: Text(
+                    'Last day becomes ${DateFormat.yMMMd().format(entry.endDate!.subtract(const Duration(days: 1)))}',
+                  ),
+                  onTap: () =>
+                      Navigator.pop(sheetContext, _PeriodAction.removeDay),
+                ),
+              if (entry.endDate != null)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.auto_awesome_outlined),
+                  title: const Text('Use usual-length estimate'),
+                  subtitle: const Text('Remove the recorded last day'),
+                  onTap: () =>
+                      Navigator.pop(sheetContext, _PeriodAction.clearEnd),
+                ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                enabled: controller.periodStarts.length > 1,
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Delete entry'),
+                subtitle: controller.periodStarts.length > 1
+                    ? null
+                    : const Text('Keep at least one period start'),
+                textColor: Theme.of(sheetContext).colorScheme.error,
+                iconColor: Theme.of(sheetContext).colorScheme.error,
+                onTap: controller.periodStarts.length > 1
+                    ? () => Navigator.pop(sheetContext, _PeriodAction.delete)
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!context.mounted || action == null) return;
+    if (action == _PeriodAction.delete) {
+      await controller.deletePeriodStart(date);
+      return;
+    }
+    if (action == _PeriodAction.addDay) {
+      await controller.updatePeriodEnd(date, extraDay);
+      return;
+    }
+    if (action == _PeriodAction.removeDay) {
+      await controller.updatePeriodEnd(
+        date,
+        entry.endDate!.subtract(const Duration(days: 1)),
+      );
+      return;
+    }
+    if (action == _PeriodAction.clearEnd) {
+      await controller.updatePeriodEnd(date, null);
+      return;
+    }
+    if (action == _PeriodAction.editEnd) {
+      final pickedEnd = await showDatePicker(
+        context: context,
+        initialDate: effectiveEnd.isAfter(today) ? today : effectiveEnd,
+        firstDate: date,
+        lastDate: today,
+        helpText: 'Choose the last bleeding day',
+      );
+      if (pickedEnd != null) {
+        await controller.updatePeriodEnd(date, pickedEnd);
+      }
+      return;
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: date.isAfter(today) ? today : date,
+      firstDate: DateTime(1900),
+      lastDate: today,
+      helpText: 'Change period start date',
+    );
+    if (picked != null) await controller.updatePeriodStart(date, picked);
+  }
+
+  Future<void> _openPregnancySettings(
+    BuildContext context,
+    UserProfile profile,
+  ) async {
+    final update = await showModalBottomSheet<_PregnancyUpdate>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => _PregnancySettingsSheet(profile: profile),
+    );
+    if (update == null) return;
+    await controller.setPregnancyMode(
+      enabled: update.enabled,
+      dueDate: update.dueDate,
+    );
   }
 
   Future<void> _confirmReset(BuildContext context, UserProfile profile) async {
@@ -324,15 +649,160 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     Navigator.pop(
       context,
-      UserProfile(
+      widget.profile.copyWith(
         name: _nameController.text.trim(),
         dateOfBirth: _dateOfBirth,
-        avatarPath: widget.profile.avatarPath,
-        lastPeriodStart: widget.profile.lastPeriodStart,
         cycleLength: _cycleLength.round(),
         periodLength: _periodLength.round(),
       ),
     );
+  }
+}
+
+enum _PeriodAction { edit, editEnd, addDay, removeDay, clearEnd, delete }
+
+enum _DueDateAction { edit, clear }
+
+class _PregnancyUpdate {
+  const _PregnancyUpdate({required this.enabled, this.dueDate});
+
+  final bool enabled;
+  final DateTime? dueDate;
+}
+
+class _PregnancySettingsSheet extends StatefulWidget {
+  const _PregnancySettingsSheet({required this.profile});
+
+  final UserProfile profile;
+
+  @override
+  State<_PregnancySettingsSheet> createState() =>
+      _PregnancySettingsSheetState();
+}
+
+class _PregnancySettingsSheetState extends State<_PregnancySettingsSheet> {
+  late bool _enabled;
+  DateTime? _dueDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _enabled = widget.profile.isPregnant;
+    _dueDate = widget.profile.dueDate;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPostpartum = widget.profile.isPostpartumOn(DateTime.now());
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              isPostpartum ? 'Postpartum tracking' : 'Pregnancy mode',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isPostpartum
+                  ? 'Cycle estimates stay paused until the first real period after pregnancy is logged.'
+                  : 'Pause period and ovulation estimates while keeping your cycle history safe.',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 14),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                isPostpartum ? 'Postpartum mode is active' : 'I am pregnant',
+              ),
+              subtitle: Text(
+                isPostpartum && _enabled
+                    ? 'Waiting for the first postpartum period'
+                    : _enabled
+                    ? 'Cycle estimates will be paused'
+                    : 'Period tracking is active',
+              ),
+              value: _enabled,
+              onChanged: isPostpartum
+                  ? null
+                  : (value) => setState(() => _enabled = value),
+            ),
+            if (isPostpartum)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Postpartum mode ends automatically when you log your first period.',
+                ),
+              ),
+            if (_enabled)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event_outlined),
+                title: const Text('Expected due date'),
+                subtitle: Text(
+                  _dueDate == null
+                      ? 'Not added'
+                      : DateFormat.yMMMMd().format(_dueDate!),
+                ),
+                trailing: const Icon(Icons.edit_calendar_outlined),
+                onTap: isPostpartum ? null : _pickDueDate,
+              ),
+            if (_enabled && _dueDate == null)
+              Text(
+                'Add a due date so Postpartum mode can start automatically.',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            if (_enabled && _dueDate != null && !isPostpartum)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _dueDate = null),
+                  icon: const Icon(Icons.close_rounded),
+                  label: const Text('Remove due date'),
+                ),
+              ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _enabled && _dueDate == null
+                    ? null
+                    : () => Navigator.pop(
+                        context,
+                        isPostpartum
+                            ? null
+                            : _PregnancyUpdate(
+                                enabled: _enabled,
+                                dueDate: _enabled ? _dueDate : null,
+                              ),
+                      ),
+                child: Text(isPostpartum ? 'Close' : 'Save tracking status'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDueDate() async {
+    final today = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _dueDate ?? today.add(const Duration(days: 140)),
+      firstDate: DateTime(1900),
+      lastDate: today.add(const Duration(days: 730)),
+      helpText: 'Expected due date',
+    );
+    if (picked != null) setState(() => _dueDate = picked);
   }
 }
 
@@ -395,21 +865,61 @@ class _SettingsGroup extends StatelessWidget {
       side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
     ),
     clipBehavior: Clip.antiAlias,
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    child: ExpansionTile(
+      key: PageStorageKey<String>('profile-section-$title'),
+      initiallyExpanded: true,
+      maintainState: true,
+      tilePadding: const EdgeInsets.fromLTRB(18, 4, 10, 4),
+      childrenPadding: const EdgeInsets.only(bottom: 6),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      title: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w900,
+          letterSpacing: .7,
+        ),
+      ),
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 5),
-          child: Text(
-            title.toUpperCase(),
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w900,
-              letterSpacing: .7,
-            ),
+        Divider(height: 1, color: Theme.of(context).colorScheme.outlineVariant),
+        ...children,
+      ],
+    ),
+  );
+}
+
+class _PrivacyGroup extends StatelessWidget {
+  const _PrivacyGroup();
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: const Color(0xFFF0F7F4),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+    clipBehavior: Clip.antiAlias,
+    child: ExpansionTile(
+      key: const PageStorageKey<String>('profile-section-privacy'),
+      initiallyExpanded: true,
+      maintainState: true,
+      tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 3),
+      childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      iconColor: const Color(0xFF26715A),
+      collapsedIconColor: const Color(0xFF26715A),
+      leading: const Icon(Icons.shield_outlined, color: Color(0xFF26715A)),
+      title: const Text(
+        'Private by design',
+        style: TextStyle(color: Color(0xFF225B49), fontWeight: FontWeight.w800),
+      ),
+      children: [
+        Text(
+          'Your profile and cycle history are stored only on this device. Android cloud backup is disabled.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: const Color(0xFF3A6758),
+            height: 1.4,
           ),
         ),
-        ...children,
       ],
     ),
   );
@@ -440,7 +950,7 @@ class _SettingTile extends StatelessWidget {
       child: Icon(icon, size: 21),
     ),
     title: Text(label),
-    subtitle: Text(value, maxLines: 1, overflow: TextOverflow.ellipsis),
+    subtitle: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
     trailing: onTap == null ? null : const Icon(Icons.chevron_right_rounded),
     onTap: onTap,
   );
