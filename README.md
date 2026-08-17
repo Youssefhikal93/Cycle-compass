@@ -17,9 +17,14 @@ calendar predictions are clearly presented as estimates.
 - Today view with cycle day, estimated phase, and next-period estimate
 - Calendar view with phase colors, editable bleeding ranges, due dates, and
   data-based early/late summaries
+- Day editor for recording protected or unprotected sex with distinct calendar
+  icons
+- Calendar legends that appear only when their phase or event is visible in
+  the displayed month
 - Educational content for menstruation, follicular, ovulation, and luteal stages
 - Pregnancy mode with required due date and automatic postpartum transition
 - Postpartum calendar coloring until the first new period is recorded
+- Editable past pregnancy and postpartum ranges for historical tracking
 - Editable period history with one-tap extra-day adjustments
 - Local SQLite storage with Android cloud backup disabled
 - Delete-all-data privacy control
@@ -68,5 +73,5 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Full unit, widget, and golden-preview suite: 40 tests passing
+- Full unit, widget, and golden-preview suite: 45 tests passing
 - Android debug APK: built, installed, and launched on an emulator

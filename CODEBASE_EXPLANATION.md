@@ -22,12 +22,13 @@ AppController (ChangeNotifier)
 AppDatabase (SQLite)
           │
           ▼
-UserProfile + PeriodEntry models
+UserProfile + calendar-history models
 ```
 
 - Widgets do not query SQLite directly.
-- `AppController` owns the in-memory profile and period-entry list, coordinates
-  writes, and notifies the UI after changes.
+- `AppController` owns the in-memory profile, period entries, intercourse
+  entries, and life-stage history, coordinates writes, and notifies the UI
+  after changes.
 - `AppDatabase` converts SQLite rows to and from model objects.
 - `CycleCalculator` is stateless and performs estimates from supplied dates.
 - Dates used for cycle tracking are normalized to date-only `DateTime` values.
@@ -71,7 +72,7 @@ is used by widget tests and golden previews.
 
 ## Persistence model
 
-The database is currently schema version 4 and contains three tables:
+The database is currently schema version 5 and contains four tables:
 
 ### `profile`
 
@@ -92,11 +93,19 @@ estimate. The `source` column currently defaults to `user`.
 
 ### `daily_logs`
 
-Reserved for future flow, pain, mood, energy, and note tracking. The table is
-created and cleared by the app, but the current UI does not write to it.
+Stores one optional protected/unprotected intercourse status per date. The
+existing flow, pain, mood, energy, and note columns remain available for future
+daily tracking.
+
+### `life_stage_entries`
+
+Stores completed pregnancy and postpartum history ranges. Each row has a stage
+type plus inclusive start and end dates. Ranges cannot overlap, and completed
+history cannot end in the future.
 
 All stored cycle dates use `YYYY-MM-DD` text. The database upgrade callback adds
-new pregnancy, manual period due-date, and postpartum columns for older users.
+pregnancy, manual period due-date, postpartum, and intercourse columns for older
+users, and creates `life_stage_entries` when needed.
 
 ## Cycle calculation rules
 
@@ -167,6 +176,10 @@ Synchronization rules are enforced in `AppController`, not only in the UI:
 The pregnancy due date (`dueDate`) and the optional next menstrual period due
 date (`nextPeriodDueDate`) are intentionally separate concepts.
 
+Completed pregnancy and postpartum history is stored separately from the
+current-mode profile fields. This lets users add, edit, and delete past ranges
+without turning current pregnancy mode on or changing current cycle tracking.
+
 ## File-by-file guide for `lib/`
 
 ### `lib/main.dart`
@@ -187,13 +200,16 @@ This is the best place for application-wide initialization and theme changes.
 The central state coordinator and mutation API.
 
 - Holds the current `UserProfile` and an immutable public view of period
-  entries.
+  entries, intercourse entries, and completed life-stage ranges.
 - Loads and persists data through `AppDatabase`.
 - Completes onboarding and creates the initial period entry.
 - Adds, edits, deletes, and adjusts period ranges.
 - Keeps `lastPeriodStart`, manual next-period due dates, and postpartum end
   dates synchronized with history changes.
 - Enforces pregnancy/postpartum transition rules.
+- Adds or replaces one intercourse status per date.
+- Validates, sorts, and persists non-overlapping past pregnancy/postpartum
+  ranges.
 - Clears all database state during reset.
 - Offers an in-memory constructor for tests.
 
@@ -204,11 +220,13 @@ inside a screen.
 
 The SQLite adapter.
 
-- Opens `cycle_compass.db` at schema version 4.
-- Creates and upgrades the `profile`, `period_entries`, and `daily_logs`
-  tables.
+- Opens `cycle_compass.db` at schema version 5.
+- Creates and upgrades the `profile`, `period_entries`, `daily_logs`, and
+  `life_stage_entries` tables.
 - Reads and replaces the single profile row.
 - Inserts, updates, and deletes period entries.
+- Reads and writes intercourse entries in `daily_logs`.
+- Inserts, updates, reads, and deletes `life_stage_entries`.
 - Uses a transaction when moving a period start so a compatible end date is
   preserved.
 - Deletes all local rows transactionally.
@@ -235,6 +253,16 @@ A small immutable model for one bleeding record.
 - `endDate` is the optional last recorded bleeding day.
 - `durationDays` returns an inclusive duration.
 - `contains()` identifies whether a date lies in an explicitly recorded range.
+
+### `lib/models/intercourse_entry.dart`
+
+Defines protected and unprotected statuses and one date-based intercourse
+entry. The status extension supplies the displayed label and SQLite value.
+
+### `lib/models/life_stage_entry.dart`
+
+Defines pregnancy and postpartum history types plus an inclusive completed
+date range. Entries carry their SQLite ID after they are saved.
 
 ### `lib/services/cycle_calculator.dart`
 
@@ -297,16 +325,20 @@ Calendar.
 The month grid, date-management UI, and month explanation layer.
 
 - Navigates between months and calculates each cell's phase.
+- Opens one day editor for protected/unprotected sex and period actions.
 - Uses explicit period ranges before estimated bleeding lengths.
 - Marks period starts, manual next-period due dates, pregnancy due dates, today,
   and recorded bleeding days.
 - Pauses phase coloring during pregnancy.
 - Colors postpartum days muted brown and gives the expected pregnancy due date
   a matching outline.
+- Colors completed pregnancy and postpartum history ranges and marks intercourse
+  entries with distinct icons.
 - Adds/manages period starts and recorded end dates from dialogs and bottom
   sheets, including “add one more day.”
 - Shows legends and a monthly summary for early/late intervals, duration
-  differences, manual due dates, and cautious range guidance.
+  differences, manual due dates, and cautious range guidance. A legend appears
+  only when its phase or event occurs in the displayed month.
 
 ### `lib/screens/learn_screen.dart`
 
@@ -326,6 +358,8 @@ The complete local-data management screen.
   length.
 - Allows a user-entered next menstrual period due date.
 - Groups pregnancy and postpartum settings in one coupled section.
+- Adds, edits, and deletes completed pregnancy or postpartum history ranges in
+  that section without changing current mode.
 - Requires a pregnancy due date, shows the derived current mode, and preserves
   previous postpartum tracking dates.
 - Lists recent period entries and supports adding, moving, deleting, extending,
@@ -357,6 +391,7 @@ Shared avatar presentation and local image management.
 | --- | --- |
 | Global colors/theme | `lib/main.dart` |
 | Add a persisted profile field | model, `app_database.dart`, controller, migration |
+| Add a calendar history type | model, `app_database.dart`, controller, Calendar and Profile |
 | Change cycle math | `services/cycle_calculator.dart` and unit tests |
 | Change pregnancy/postpartum rules | `user_profile.dart`, `app_controller.dart`, relevant screens |
 | Change calendar colors or cell markers | `screens/calendar_screen.dart` |

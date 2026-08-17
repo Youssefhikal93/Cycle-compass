@@ -1,5 +1,7 @@
 import 'package:cycle_compass/app_controller.dart';
 import 'package:cycle_compass/main.dart';
+import 'package:cycle_compass/models/intercourse_entry.dart';
+import 'package:cycle_compass/models/life_stage_entry.dart';
 import 'package:cycle_compass/models/user_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -103,6 +105,90 @@ void main() {
         expect(controller.profile!.lastPeriodStart, DateTime(2026, 8, 25));
       },
     );
+  });
+
+  group('calendar event history', () {
+    late AppController controller;
+
+    setUp(() async {
+      controller = AppController.inMemory();
+      await controller.completeOnboarding(
+        UserProfile(
+          name: 'Nadia Rahman',
+          dateOfBirth: DateTime(1997, 4, 16),
+          lastPeriodStart: DateTime(2026, 8, 1),
+          cycleLength: 28,
+          periodLength: 5,
+        ),
+      );
+    });
+
+    test(
+      'changing protection replaces the intercourse entry for that day',
+      () async {
+        final date = DateTime(2026, 8, 12);
+
+        await controller.saveIntercourseEntry(date, ProtectionStatus.protected);
+        await controller.saveIntercourseEntry(
+          date,
+          ProtectionStatus.unprotected,
+        );
+
+        expect(controller.intercourseEntries, hasLength(1));
+        expect(
+          controller.intercourseEntryOn(date)?.protectionStatus,
+          ProtectionStatus.unprotected,
+        );
+      },
+    );
+
+    test('completed life-stage ranges cannot overlap', () async {
+      await controller.saveLifeStageEntry(
+        LifeStageEntry(
+          type: LifeStageType.pregnancy,
+          startDate: DateTime(2024, 1, 1),
+          endDate: DateTime(2024, 7, 1),
+        ),
+      );
+      await controller.saveLifeStageEntry(
+        LifeStageEntry(
+          type: LifeStageType.postpartum,
+          startDate: DateTime(2024, 7, 2),
+          endDate: DateTime(2024, 9, 30),
+        ),
+      );
+
+      expect(controller.lifeStageEntries, hasLength(2));
+      expect(
+        () => controller.saveLifeStageEntry(
+          LifeStageEntry(
+            type: LifeStageType.postpartum,
+            startDate: DateTime(2024, 6, 1),
+            endDate: DateTime(2024, 8, 1),
+          ),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('past history cannot overlap active pregnancy tracking', () async {
+      await controller.setPregnancyMode(
+        enabled: true,
+        dueDate: DateTime.now().add(const Duration(days: 140)),
+      );
+      final activeStart = controller.profile!.pregnancyStartedOn!;
+
+      expect(
+        () => controller.saveLifeStageEntry(
+          LifeStageEntry(
+            type: LifeStageType.pregnancy,
+            startDate: activeStart.subtract(const Duration(days: 30)),
+            endDate: activeStart,
+          ),
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 
   test(
@@ -586,6 +672,90 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Set expected date'), findsOneWidget);
+  });
+
+  testWidgets('calendar day editor records protection and updates its legend', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    final today = DateTime.now();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: today.subtract(const Duration(days: 8)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Protected sex'), findsNothing);
+    expect(find.text('Unprotected sex'), findsNothing);
+
+    await tester.tap(find.text('${today.day}').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sex with protection'));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.intercourseEntryOn(today)?.protectionStatus,
+      ProtectionStatus.protected,
+    );
+    expect(find.text('Protected sex'), findsOneWidget);
+    expect(find.text('Unprotected sex'), findsNothing);
+    expect(
+      find.byIcon(Icons.health_and_safety_outlined),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('profile can add a completed postpartum history range', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Add past pregnancy or postpartum'),
+      350,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -140));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add past pregnancy or postpartum'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Postpartum').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Start date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('End date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save history'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lifeStageEntries.single.type, LifeStageType.postpartum);
   });
 
   testWidgets('profile sections are expanded by default and collapsible', (

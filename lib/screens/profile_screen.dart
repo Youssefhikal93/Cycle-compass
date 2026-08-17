@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
-import '../models/user_profile.dart';
+import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
+import '../models/user_profile.dart';
 import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
@@ -157,6 +158,27 @@ class ProfileScreen extends StatelessWidget {
                       'ended with first period',
                   onTap: null,
                 ),
+              for (final entry in controller.lifeStageEntries)
+                _SettingTile(
+                  icon: entry.type == LifeStageType.pregnancy
+                      ? Icons.favorite_outline_rounded
+                      : Icons.spa_outlined,
+                  label: '${entry.type.label} history',
+                  value:
+                      '${DateFormat.yMMMd().format(entry.startDate)} – '
+                      '${DateFormat.yMMMd().format(entry.endDate)} · '
+                      '${entry.durationDays} days',
+                  onTap: () => _openLifeStageEditor(context, entry),
+                ),
+              ListTile(
+                leading: const Icon(Icons.add_circle_outline_rounded),
+                title: const Text('Add past pregnancy or postpartum'),
+                subtitle: const Text(
+                  'Record a completed date range for your history',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => _openLifeStageEditor(context),
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -492,6 +514,64 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _openLifeStageEditor(
+    BuildContext context, [
+    LifeStageEntry? existingEntry,
+  ]) async {
+    final editorResult = await showModalBottomSheet<_LifeStageEditorResult>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => _LifeStageEditorSheet(entry: existingEntry),
+    );
+    if (!context.mounted || editorResult == null) return;
+    if (editorResult.action == _LifeStageEditorAction.save) {
+      await _saveLifeStageEntry(context, editorResult.entry);
+      return;
+    }
+    await _confirmLifeStageDelete(context, editorResult.entry);
+  }
+
+  Future<void> _saveLifeStageEntry(
+    BuildContext context,
+    LifeStageEntry entry,
+  ) async {
+    try {
+      await controller.saveLifeStageEntry(entry);
+    } on ArgumentError catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message?.toString() ?? 'Invalid range.')),
+      );
+    }
+  }
+
+  Future<void> _confirmLifeStageDelete(
+    BuildContext context,
+    LifeStageEntry entry,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${entry.type.label.toLowerCase()} history?'),
+        content: const Text(
+          'This date range will be removed from the calendar and history.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete history'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.deleteLifeStageEntry(entry);
+  }
+
   Future<void> _confirmReset(BuildContext context, UserProfile profile) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -668,6 +748,192 @@ class _PregnancyUpdate {
 
   final bool enabled;
   final DateTime? dueDate;
+}
+
+enum _LifeStageEditorAction { save, delete }
+
+class _LifeStageEditorResult {
+  const _LifeStageEditorResult({required this.action, required this.entry});
+
+  final _LifeStageEditorAction action;
+  final LifeStageEntry entry;
+}
+
+class _LifeStageEditorSheet extends StatefulWidget {
+  const _LifeStageEditorSheet({this.entry});
+
+  final LifeStageEntry? entry;
+
+  @override
+  State<_LifeStageEditorSheet> createState() => _LifeStageEditorSheetState();
+}
+
+class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
+  late LifeStageType _type;
+  DateTime? _startDate;
+  DateTime? _endDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.entry?.type ?? LifeStageType.pregnancy;
+    _startDate = widget.entry?.startDate;
+    _endDate = widget.entry?.endDate;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          0,
+          24,
+          MediaQuery.viewInsetsOf(context).bottom + 24,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.entry == null ? 'Add past history' : 'Edit past history',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Add a completed range. Current pregnancy tracking stays separate.',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 18),
+            _typeSelector(),
+            const SizedBox(height: 14),
+            _dateSelector(
+              Icons.first_page_rounded,
+              'Start date',
+              _startDate,
+              _pickStartDate,
+            ),
+            _dateSelector(
+              Icons.last_page_rounded,
+              'End date',
+              _endDate,
+              _pickEndDate,
+            ),
+            const SizedBox(height: 14),
+            _editorActions(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _typeSelector() => SegmentedButton<LifeStageType>(
+    segments: const [
+      ButtonSegment(
+        value: LifeStageType.pregnancy,
+        label: Text('Pregnancy'),
+        icon: Icon(Icons.favorite_outline_rounded),
+      ),
+      ButtonSegment(
+        value: LifeStageType.postpartum,
+        label: Text('Postpartum'),
+        icon: Icon(Icons.spa_outlined),
+      ),
+    ],
+    selected: {_type},
+    onSelectionChanged: _selectType,
+  );
+
+  Widget _dateSelector(
+    IconData icon,
+    String label,
+    DateTime? date,
+    VoidCallback onTap,
+  ) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: Icon(icon),
+    title: Text(label),
+    subtitle: Text(_dateLabel(date)),
+    trailing: const Icon(Icons.edit_calendar_outlined),
+    onTap: onTap,
+  );
+
+  Widget _editorActions() => Row(
+    children: [
+      if (widget.entry != null) ...[
+        OutlinedButton.icon(
+          onPressed: () => _close(_LifeStageEditorAction.delete),
+          icon: const Icon(Icons.delete_outline_rounded),
+          label: const Text('Delete'),
+        ),
+        const SizedBox(width: 12),
+      ],
+      Expanded(
+        child: FilledButton(
+          onPressed: _startDate == null || _endDate == null
+              ? null
+              : () => _close(_LifeStageEditorAction.save),
+          child: const Text('Save history'),
+        ),
+      ),
+    ],
+  );
+
+  Future<void> _pickStartDate() async {
+    final today = _day(DateTime.now());
+    final initialEnd = _endDate ?? today;
+    final suggestedDays = switch (_type) {
+      LifeStageType.pregnancy => 280,
+      LifeStageType.postpartum => 42,
+    };
+    final picked = await showDatePicker(
+      context: context,
+      initialDate:
+          _startDate ?? initialEnd.subtract(Duration(days: suggestedDays)),
+      firstDate: DateTime(1900),
+      lastDate: initialEnd,
+      helpText: '${_type.label} start date',
+    );
+    if (picked != null) setState(() => _startDate = picked);
+  }
+
+  Future<void> _pickEndDate() async {
+    final today = _day(DateTime.now());
+    final initialDate = _endDate ?? today;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: _startDate ?? DateTime(1900),
+      lastDate: today,
+      helpText: '${_type.label} end date',
+    );
+    if (picked != null) setState(() => _endDate = picked);
+  }
+
+  void _selectType(Set<LifeStageType> selection) =>
+      setState(() => _type = selection.first);
+
+  String _dateLabel(DateTime? date) =>
+      date == null ? 'Choose a date' : DateFormat.yMMMMd().format(date);
+
+  void _close(_LifeStageEditorAction action) {
+    Navigator.pop(
+      context,
+      _LifeStageEditorResult(
+        action: action,
+        entry: LifeStageEntry(
+          id: widget.entry?.id,
+          type: _type,
+          startDate: _startDate!,
+          endDate: _endDate!,
+        ),
+      ),
+    );
+  }
 }
 
 class _PregnancySettingsSheet extends StatefulWidget {
@@ -955,3 +1221,5 @@ class _SettingTile extends StatelessWidget {
     onTap: onTap,
   );
 }
+
+DateTime _day(DateTime date) => DateTime(date.year, date.month, date.day);

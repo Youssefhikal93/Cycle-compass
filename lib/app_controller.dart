@@ -1,8 +1,10 @@
 import 'package:flutter/foundation.dart';
 
 import 'data/app_database.dart';
-import 'models/user_profile.dart';
+import 'models/intercourse_entry.dart';
+import 'models/life_stage_entry.dart';
 import 'models/period_entry.dart';
+import 'models/user_profile.dart';
 
 class AppController extends ChangeNotifier {
   AppController(this._database);
@@ -12,9 +14,15 @@ class AppController extends ChangeNotifier {
   final AppDatabase? _database;
   UserProfile? _profile;
   List<PeriodEntry> _periodEntries = const [];
+  List<IntercourseEntry> _intercourseEntries = const [];
+  List<LifeStageEntry> _lifeStageEntries = const [];
 
   UserProfile? get profile => _profile;
   List<PeriodEntry> get periodEntries => List.unmodifiable(_periodEntries);
+  List<IntercourseEntry> get intercourseEntries =>
+      List.unmodifiable(_intercourseEntries);
+  List<LifeStageEntry> get lifeStageEntries =>
+      List.unmodifiable(_lifeStageEntries);
   List<DateTime> get periodStarts =>
       _periodEntries.map((entry) => entry.startDate).toList(growable: false);
   bool get isOnboarded => _profile != null;
@@ -24,6 +32,8 @@ class AppController extends ChangeNotifier {
     if (database != null) {
       _profile = await database.readProfile();
       _periodEntries = await database.readPeriodEntries();
+      _intercourseEntries = await database.readIntercourseEntries();
+      _lifeStageEntries = await database.readLifeStageEntries();
     }
     notifyListeners();
   }
@@ -209,6 +219,124 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  IntercourseEntry? intercourseEntryOn(DateTime date) {
+    final normalizedDate = _day(date);
+    for (final entry in _intercourseEntries) {
+      if (entry.date == normalizedDate) return entry;
+    }
+    return null;
+  }
+
+  Future<void> saveIntercourseEntry(
+    DateTime date,
+    ProtectionStatus protectionStatus,
+  ) async {
+    final normalizedDate = _day(date);
+    if (normalizedDate.isAfter(_day(DateTime.now()))) {
+      throw ArgumentError('Intercourse cannot be recorded in the future.');
+    }
+    final entry = IntercourseEntry(
+      date: normalizedDate,
+      protectionStatus: protectionStatus,
+    );
+    await _database?.saveIntercourseEntry(entry);
+    _intercourseEntries = [
+      entry,
+      ..._intercourseEntries.where(
+        (existing) => existing.date != normalizedDate,
+      ),
+    ];
+    notifyListeners();
+  }
+
+  Future<void> deleteIntercourseEntry(DateTime date) async {
+    final normalizedDate = _day(date);
+    await _database?.deleteIntercourseEntry(normalizedDate);
+    _intercourseEntries = _intercourseEntries
+        .where((entry) => entry.date != normalizedDate)
+        .toList(growable: false);
+    notifyListeners();
+  }
+
+  Future<void> saveLifeStageEntry(LifeStageEntry entry) async {
+    final normalizedEntry = _normalizedLifeStageEntry(entry);
+    _validateLifeStageEntry(normalizedEntry);
+    final database = _database;
+    final savedEntry = database == null
+        ? normalizedEntry.copyWith(id: normalizedEntry.id ?? _nextLifeStageId())
+        : await database.saveLifeStageEntry(normalizedEntry);
+    _lifeStageEntries =
+        [
+          savedEntry,
+          ..._lifeStageEntries.where(
+            (existing) => existing.id != savedEntry.id,
+          ),
+        ]..sort(
+          (leftEntry, rightEntry) =>
+              rightEntry.startDate.compareTo(leftEntry.startDate),
+        );
+    notifyListeners();
+  }
+
+  Future<void> deleteLifeStageEntry(LifeStageEntry entry) async {
+    final id = entry.id;
+    if (id == null) throw ArgumentError('Only saved history can be deleted.');
+    await _database?.deleteLifeStageEntry(id);
+    _lifeStageEntries = _lifeStageEntries
+        .where((existing) => existing.id != id)
+        .toList(growable: false);
+    notifyListeners();
+  }
+
+  LifeStageEntry _normalizedLifeStageEntry(LifeStageEntry entry) =>
+      LifeStageEntry(
+        id: entry.id,
+        type: entry.type,
+        startDate: _day(entry.startDate),
+        endDate: _day(entry.endDate),
+      );
+
+  void _validateLifeStageEntry(LifeStageEntry entry) {
+    if (entry.endDate.isBefore(entry.startDate)) {
+      throw ArgumentError('The history end date cannot be before its start.');
+    }
+    if (entry.endDate.isAfter(_day(DateTime.now()))) {
+      throw ArgumentError('Past history cannot end in the future.');
+    }
+    if (_overlapsSavedLifeStage(entry)) {
+      throw ArgumentError('Pregnancy and postpartum history cannot overlap.');
+    }
+    if (_overlapsActiveLifeStage(entry)) {
+      throw ArgumentError(
+        'Past history cannot overlap current pregnancy or postpartum tracking.',
+      );
+    }
+  }
+
+  bool _overlapsSavedLifeStage(LifeStageEntry entry) => _lifeStageEntries.any(
+    (existing) =>
+        existing.id != entry.id &&
+        !entry.endDate.isBefore(existing.startDate) &&
+        !entry.startDate.isAfter(existing.endDate),
+  );
+
+  bool _overlapsActiveLifeStage(LifeStageEntry entry) {
+    final current = _profile;
+    final activeStart = current?.pregnancyStartedOn;
+    return current?.isPregnant == true &&
+        activeStart != null &&
+        !entry.endDate.isBefore(_day(activeStart));
+  }
+
+  int _nextLifeStageId() {
+    final ids = _lifeStageEntries
+        .map((entry) => entry.id ?? 0)
+        .toList(growable: false);
+    return ids.isEmpty
+        ? 1
+        : ids.reduce((highestId, id) => highestId > id ? highestId : id) + 1;
+  }
+
   Future<void> _syncLatestPeriod(
     UserProfile current, {
     bool clearDueDate = false,
@@ -231,6 +359,8 @@ class AppController extends ChangeNotifier {
     await _database?.clearAllData();
     _profile = null;
     _periodEntries = const [];
+    _intercourseEntries = const [];
+    _lifeStageEntries = const [];
     notifyListeners();
   }
 }

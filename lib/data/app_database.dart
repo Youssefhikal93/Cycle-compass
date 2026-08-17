@@ -1,8 +1,10 @@
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
-import '../models/user_profile.dart';
+import '../models/intercourse_entry.dart';
+import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
+import '../models/user_profile.dart';
 
 class AppDatabase {
   AppDatabase._(this._database);
@@ -13,7 +15,7 @@ class AppDatabase {
     final root = await getDatabasesPath();
     final database = await openDatabase(
       p.join(root, 'cycle_compass.db'),
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE profile (
@@ -47,7 +49,16 @@ class AppDatabase {
             pain INTEGER,
             mood INTEGER,
             energy INTEGER,
-            note TEXT
+            note TEXT,
+            intercourse_protection TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE life_stage_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stage_type TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL
           )
         ''');
       },
@@ -73,6 +84,19 @@ class AppDatabase {
           await db.execute(
             'ALTER TABLE profile ADD COLUMN postpartum_ended_on TEXT',
           );
+        }
+        if (oldVersion < 5) {
+          await db.execute(
+            'ALTER TABLE daily_logs ADD COLUMN intercourse_protection TEXT',
+          );
+          await db.execute('''
+            CREATE TABLE life_stage_entries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              stage_type TEXT NOT NULL,
+              start_date TEXT NOT NULL,
+              end_date TEXT NOT NULL
+            )
+          ''');
         }
       },
     );
@@ -167,8 +191,109 @@ class AppDatabase {
         .toList(growable: false);
   }
 
+  Future<void> saveIntercourseEntry(IntercourseEntry entry) async {
+    final fields = {
+      'intercourse_protection': entry.protectionStatus.storageValue,
+    };
+    final updated = await _database.update(
+      'daily_logs',
+      fields,
+      where: 'log_date = ?',
+      whereArgs: [_dateOnly(entry.date)],
+    );
+    if (updated == 0) {
+      await _database.insert('daily_logs', {
+        'log_date': _dateOnly(entry.date),
+        ...fields,
+      });
+    }
+  }
+
+  Future<void> deleteIntercourseEntry(DateTime date) async {
+    final storedDate = _dateOnly(date);
+    await _database.update(
+      'daily_logs',
+      {'intercourse_protection': null},
+      where: 'log_date = ?',
+      whereArgs: [storedDate],
+    );
+    await _database.delete(
+      'daily_logs',
+      where:
+          'log_date = ? AND flow IS NULL AND pain IS NULL AND mood IS NULL '
+          'AND energy IS NULL AND note IS NULL',
+      whereArgs: [storedDate],
+    );
+  }
+
+  Future<List<IntercourseEntry>> readIntercourseEntries() async {
+    final rows = await _database.query(
+      'daily_logs',
+      columns: ['log_date', 'intercourse_protection'],
+      where: 'intercourse_protection IS NOT NULL',
+      orderBy: 'log_date DESC',
+    );
+    return rows
+        .map(
+          (row) => IntercourseEntry(
+            date: DateTime.parse(row['log_date']! as String),
+            protectionStatus: protectionStatusFromStorage(
+              row['intercourse_protection']! as String,
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<LifeStageEntry> saveLifeStageEntry(LifeStageEntry entry) async {
+    final fields = {
+      'stage_type': entry.type.storageValue,
+      'start_date': _dateOnly(entry.startDate),
+      'end_date': _dateOnly(entry.endDate),
+    };
+    final id = entry.id;
+    if (id == null) {
+      final insertedId = await _database.insert('life_stage_entries', fields);
+      return entry.copyWith(id: insertedId);
+    }
+    final updated = await _database.update(
+      'life_stage_entries',
+      fields,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (updated != 1) throw StateError('Life-stage entry $id was not found.');
+    return entry;
+  }
+
+  Future<void> deleteLifeStageEntry(int id) async {
+    await _database.delete(
+      'life_stage_entries',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<List<LifeStageEntry>> readLifeStageEntries() async {
+    final rows = await _database.query(
+      'life_stage_entries',
+      orderBy: 'start_date DESC',
+    );
+    return rows
+        .map(
+          (row) => LifeStageEntry(
+            id: row['id']! as int,
+            type: lifeStageTypeFromStorage(row['stage_type']! as String),
+            startDate: DateTime.parse(row['start_date']! as String),
+            endDate: DateTime.parse(row['end_date']! as String),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   Future<void> clearAllData() async {
     await _database.transaction((transaction) async {
+      await transaction.delete('life_stage_entries');
       await transaction.delete('daily_logs');
       await transaction.delete('period_entries');
       await transaction.delete('profile');
