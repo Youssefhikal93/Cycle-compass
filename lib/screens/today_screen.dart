@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
+import '../models/user_profile.dart';
+import '../models/period_entry.dart';
 import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
@@ -18,12 +20,28 @@ class TodayScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final profile = controller.profile!;
+    if (profile.isPregnant) {
+      return _PregnancyTodayView(
+        controller: controller,
+        profile: profile,
+        onOpenProfile: onOpenProfile,
+      );
+    }
     final now = DateTime.now();
-    final snapshot = const CycleCalculator().calculate(
+    final calculatedSnapshot = const CycleCalculator().calculate(
       onDate: now,
       lastPeriodStart: profile.lastPeriodStart,
       cycleLength: profile.cycleLength,
       periodLength: profile.periodLength,
+      periodStarts: controller.periodStarts,
+      nextPeriodDueDate: profile.nextPeriodDueDate,
+    );
+    final snapshot = calculatedSnapshot.copyWith(
+      phase: _phaseFromRecordedRange(
+        calculatedSnapshot,
+        now,
+        controller.periodEntries,
+      ),
     );
     final phaseColor = colorForPhase(snapshot.phase);
     return SafeArea(
@@ -96,7 +114,10 @@ class TodayScreen extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _ConfidenceBadge(color: phaseColor),
+                          _ConfidenceBadge(
+                            color: phaseColor,
+                            basis: snapshot.estimateBasis,
+                          ),
                           Flexible(
                             child: Text(
                               DateFormat.MMMd().format(now),
@@ -144,7 +165,11 @@ class TodayScreen extends StatelessWidget {
                             const SizedBox(width: 9),
                             Expanded(
                               child: Text(
-                                'Next period estimated in ${snapshot.daysUntilNextPeriod} days',
+                                _nextPeriodText(
+                                  now: now,
+                                  snapshot: snapshot,
+                                  manualDueDate: profile.nextPeriodDueDate,
+                                ),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -235,6 +260,219 @@ class TodayScreen extends StatelessWidget {
   }
 }
 
+CyclePhase _phaseFromRecordedRange(
+  CycleSnapshot snapshot,
+  DateTime date,
+  List<PeriodEntry> entries,
+) {
+  PeriodEntry? matching;
+  for (final entry in entries) {
+    if (DateUtils.isSameDay(entry.startDate, snapshot.currentCycleStart)) {
+      matching = entry;
+      break;
+    }
+  }
+  if (matching == null || matching.endDate == null) return snapshot.phase;
+  if (matching.contains(date)) return CyclePhase.menstruation;
+  if (snapshot.phase == CyclePhase.menstruation &&
+      date.isAfter(matching.endDate!)) {
+    return CyclePhase.follicular;
+  }
+  return snapshot.phase;
+}
+
+class _PregnancyTodayView extends StatelessWidget {
+  const _PregnancyTodayView({
+    required this.controller,
+    required this.profile,
+    required this.onOpenProfile,
+  });
+
+  final AppController controller;
+  final UserProfile profile;
+  final VoidCallback onOpenProfile;
+
+  @override
+  Widget build(BuildContext context) {
+    final isPostpartum = profile.isPostpartumOn(DateTime.now());
+    final color = isPostpartum
+        ? const Color(0xFF397A6B)
+        : const Color(0xFF9B4D73);
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _greeting(),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      profile.name.split(' ').first,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -.5,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Open profile',
+                onPressed: onOpenProfile,
+                icon: ProfileAvatar(
+                  name: profile.name,
+                  avatarPath: profile.avatarPath,
+                  radius: 24,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [color.withValues(alpha: .18), Colors.white],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: color.withValues(alpha: .24)),
+            ),
+            child: Column(
+              children: [
+                Container(
+                  width: 88,
+                  height: 88,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .13),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    isPostpartum ? Icons.spa_outlined : Icons.favorite_rounded,
+                    size: 44,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  isPostpartum ? 'Postpartum mode' : 'Pregnancy mode is on',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  isPostpartum
+                      ? 'Your expected due date has arrived. Cycle estimates stay paused until you record the first real period after pregnancy.'
+                      : 'Period and ovulation estimates are paused. Your previous cycle history is safely kept on this device.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.45,
+                  ),
+                ),
+                if (profile.dueDate != null) ...[
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .82),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.event_outlined, size: 20),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Text(
+                            isPostpartum
+                                ? 'Postpartum from expected due date: ${DateFormat.yMMMMd().format(profile.dueDate!)}'
+                                : 'Expected due date: ${DateFormat.yMMMMd().format(profile.dueDate!)}',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: isPostpartum
+                ? () => _logFirstPostpartumPeriod(context)
+                : onOpenProfile,
+            icon: Icon(
+              isPostpartum ? Icons.water_drop_outlined : Icons.tune_rounded,
+            ),
+            label: Text(
+              isPostpartum
+                  ? 'Log first postpartum period'
+                  : 'Manage tracking status',
+            ),
+          ),
+          if (isPostpartum)
+            TextButton(
+              onPressed: onOpenProfile,
+              child: const Text('Manage tracking status'),
+            ),
+          const SizedBox(height: 14),
+          Text(
+            isPostpartum
+                ? 'Postpartum bleeding after birth is not necessarily a menstrual period. Log a period only when you believe your menstrual cycle has returned.'
+                : 'This mode stores a tracking preference only. It does not confirm or monitor a pregnancy.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _logFirstPostpartumPeriod(BuildContext context) async {
+    final today = DateTime.now();
+    final dueDate = profile.dueDate!;
+    final firstDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: firstDate,
+      lastDate: today,
+      helpText: 'First period after pregnancy',
+    );
+    if (picked == null) return;
+    await controller.logPeriodStart(picked);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Postpartum period logged. Cycle tracking resumed.'),
+      ),
+    );
+  }
+}
+
 class _CycleRing extends StatelessWidget {
   const _CycleRing({required this.snapshot, required this.color});
 
@@ -286,9 +524,10 @@ class _CycleRing extends StatelessWidget {
 }
 
 class _ConfidenceBadge extends StatelessWidget {
-  const _ConfidenceBadge({required this.color});
+  const _ConfidenceBadge({required this.color, required this.basis});
 
   final Color color;
+  final CycleEstimateBasis basis;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -303,7 +542,12 @@ class _ConfidenceBadge extends StatelessWidget {
         Icon(Icons.auto_awesome_outlined, size: 15, color: color),
         const SizedBox(width: 5),
         Text(
-          'EARLY ESTIMATE',
+          switch (basis) {
+            CycleEstimateBasis.configuredLength => 'SETTINGS-BASED',
+            CycleEstimateBasis.recentHistory => 'BASED ON HISTORY',
+            CycleEstimateBasis.manualDueDate => 'DATE SET BY YOU',
+            CycleEstimateBasis.recordedCycle => 'RECORDED CYCLE',
+          },
           style: TextStyle(
             color: color,
             fontWeight: FontWeight.w800,
@@ -314,6 +558,31 @@ class _ConfidenceBadge extends StatelessWidget {
       ],
     ),
   );
+}
+
+String _nextPeriodText({
+  required DateTime now,
+  required CycleSnapshot snapshot,
+  required DateTime? manualDueDate,
+}) {
+  if (manualDueDate == null) {
+    return 'Next period estimated in ${snapshot.daysUntilNextPeriod} days';
+  }
+  final today = DateTime(now.year, now.month, now.day);
+  final due = DateTime(
+    manualDueDate.year,
+    manualDueDate.month,
+    manualDueDate.day,
+  );
+  final difference = due.difference(today).inDays;
+  if (difference < 0) {
+    final overdue = difference.abs();
+    return 'Due date was $overdue ${overdue == 1 ? 'day' : 'days'} ago · update or log a period';
+  }
+  final timing = difference == 0
+      ? 'today'
+      : 'in $difference ${difference == 1 ? 'day' : 'days'}';
+  return 'Period due ${DateFormat.MMMd().format(due)} · $timing';
 }
 
 class _PhaseTile extends StatelessWidget {

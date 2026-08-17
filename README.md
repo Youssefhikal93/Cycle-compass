@@ -15,9 +15,17 @@ calendar predictions are clearly presented as estimates.
 - Optional gallery avatar with automatic first/last-name initials fallback
 - Editable name, date of birth, avatar, cycle length, and period length
 - Today view with cycle day, estimated phase, and next-period estimate
-- Calendar view with phase colors and recorded period starts
+- Calendar view with phase colors, editable bleeding ranges, due dates, and
+  data-based early/late summaries
+- Day editor for recording protected or unprotected sex with distinct calendar
+  icons
+- Calendar legends that appear only when their phase or event is visible in
+  the displayed month
 - Educational content for menstruation, follicular, ovulation, and luteal stages
-- One-tap period-start logging
+- Pregnancy mode with required due date and automatic postpartum transition
+- Postpartum calendar coloring until the first new period is recorded
+- Editable past pregnancy and postpartum ranges for historical tracking
+- Editable period history with one-tap extra-day adjustments
 - Local SQLite storage with Android cloud backup disabled
 - Delete-all-data privacy control
 - Responsive Material 3 interface with rendered phone-size preview tests
@@ -41,6 +49,10 @@ lib/
 └── main.dart
 ```
 
+For the current architecture, runtime flows, database schema, pregnancy and
+postpartum state transitions, and a file-by-file explanation of everything in
+`lib/`, see [CODEBASE_EXPLANATION.md](CODEBASE_EXPLANATION.md).
+
 ## Run locally
 
 Requirements:
@@ -61,9 +73,5 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Cycle calculation unit tests: 5 passing
-- Phone-size rendered preview tests: 3 passing
-
-An Android APK could not be produced on the development machine because an
-Android SDK is not currently installed/configured there. The Flutter source and
-tests are complete; configuring the Android SDK is the remaining packaging step.
+- Full unit, widget, and golden-preview suite: 45 tests passing
+- Android debug APK: built, installed, and launched on an emulator

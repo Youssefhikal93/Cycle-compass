@@ -46,6 +46,9 @@ void main() {
         periodLength: 5,
       ),
     );
+    await controller.setNextPeriodDueDate(
+      DateTime.now().add(const Duration(days: 20)),
+    );
     const previewKey = ValueKey('home-preview');
 
     await tester.pumpWidget(
@@ -59,6 +62,76 @@ void main() {
     await expectLater(
       find.byKey(previewKey),
       matchesGoldenFile('goldens/home.png'),
+    );
+  });
+
+  testWidgets('renders postpartum mode preview', (tester) async {
+    await tester.binding.setSurfaceSize(phoneSize);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    final today = DateTime.now();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: today.subtract(const Duration(days: 250)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await controller.setPregnancyMode(
+      enabled: true,
+      dueDate: today.subtract(const Duration(days: 1)),
+    );
+    const previewKey = ValueKey('postpartum-preview');
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: previewKey,
+        child: CycleCompassApp(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byKey(previewKey),
+      matchesGoldenFile('goldens/postpartum.png'),
+    );
+  });
+
+  testWidgets('renders postpartum calendar color preview', (tester) async {
+    await tester.binding.setSurfaceSize(phoneSize);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    final today = DateTime.now();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: today.subtract(const Duration(days: 250)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await controller.setPregnancyMode(
+      enabled: true,
+      dueDate: today.subtract(const Duration(days: 10)),
+    );
+    const previewKey = ValueKey('postpartum-calendar-preview');
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: previewKey,
+        child: CycleCompassApp(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byKey(previewKey),
+      matchesGoldenFile('goldens/calendar-postpartum.png'),
     );
   });
 
@@ -90,6 +163,50 @@ void main() {
     await expectLater(
       find.byKey(previewKey),
       matchesGoldenFile('goldens/profile.png'),
+    );
+  });
+
+  testWidgets('renders irregular-cycle calendar guidance', (tester) async {
+    await tester.binding.setSurfaceSize(phoneSize);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    final now = DateTime.now();
+    final latest = DateTime(now.year, now.month, 1);
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: latest.subtract(const Duration(days: 16)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await controller.logPeriodStart(latest);
+    await controller.updatePeriodEnd(
+      latest,
+      latest.add(const Duration(days: 5)),
+    );
+    await controller.setNextPeriodDueDate(latest.add(const Duration(days: 20)));
+    const previewKey = ValueKey('calendar-preview');
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: previewKey,
+        child: CycleCompassApp(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byType(SingleChildScrollView).hitTestable(),
+      const Offset(0, 600),
+    );
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byKey(previewKey),
+      matchesGoldenFile('goldens/calendar-irregular.png'),
     );
   });
 }
