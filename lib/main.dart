@@ -4,11 +4,17 @@ import 'app_controller.dart';
 import 'data/app_database.dart';
 import 'screens/home_shell.dart';
 import 'screens/onboarding_screen.dart';
+import 'services/cycle_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final database = await AppDatabase.open();
-  final controller = AppController(database);
+  final notificationService = CycleNotificationService();
+  await notificationService.initialize();
+  final controller = AppController(
+    database,
+    notificationService: notificationService,
+  );
   await controller.load();
   runApp(CycleCompassApp(controller: controller));
 }

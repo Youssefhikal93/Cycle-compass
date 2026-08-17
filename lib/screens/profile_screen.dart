@@ -120,6 +120,32 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _SettingsGroup(
+            title: 'Notifications',
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.notifications_active_outlined),
+                title: const Text('Cycle notifications'),
+                subtitle: Text(
+                  profile.notificationsEnabled
+                      ? controller.notificationsAllowed
+                            ? 'On · every estimated phase and mode change '
+                                  'around 9:00 AM'
+                            : 'On · Android permission is needed'
+                      : 'Off',
+                ),
+                value: profile.notificationsEnabled,
+                onChanged: (enabled) async {
+                  if (enabled) {
+                    await _enableNotifications(context);
+                  } else {
+                    await controller.disableNotifications();
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
             title: 'Pregnancy & postpartum',
             children: [
               _SettingTile(
@@ -238,6 +264,18 @@ class ProfileScreen extends StatelessWidget {
 
   Future<void> _updateAvatar(UserProfile profile, String? path) async {
     await controller.updateProfile(profile.copyWith(avatarPath: path));
+  }
+
+  Future<void> _enableNotifications(BuildContext context) async {
+    final allowed = await controller.enableNotifications();
+    if (!context.mounted || allowed) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Allow notifications in Android settings to turn reminders on.',
+        ),
+      ),
+    );
   }
 
   Future<void> _openEditor(BuildContext context, UserProfile profile) async {

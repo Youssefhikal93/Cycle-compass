@@ -19,6 +19,14 @@ class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _offerNotificationPermission(),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final pages = [
       TodayScreen(
@@ -59,4 +67,48 @@ class _HomeShellState extends State<HomeShell> {
       ),
     );
   }
+
+  Future<void> _offerNotificationPermission() async {
+    if (!mounted || !widget.controller.needsNotificationPermission) return;
+    final allow = await _showNotificationPermissionDialog();
+    if (allow != true) {
+      await widget.controller.disableNotifications();
+      return;
+    }
+    final allowed = await widget.controller.enableNotifications();
+    if (!mounted || allowed) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Notifications remain off because Android permission was not granted.',
+        ),
+      ),
+    );
+  }
+
+  Future<bool?> _showNotificationPermissionDialog() => showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: _notificationPermissionDialog,
+  );
+
+  Widget _notificationPermissionDialog(BuildContext dialogContext) =>
+      AlertDialog(
+        icon: const Icon(Icons.notifications_active_outlined),
+        title: const Text('Allow cycle reminders?'),
+        content: const Text(
+          'Cycle Compass can notify you when each estimated phase begins, '
+          'including ovulation, even while the app is closed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Allow reminders'),
+          ),
+        ],
+      );
 }

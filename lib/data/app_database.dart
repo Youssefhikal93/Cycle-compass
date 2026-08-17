@@ -15,7 +15,7 @@ class AppDatabase {
     final root = await getDatabasesPath();
     final database = await openDatabase(
       p.join(root, 'cycle_compass.db'),
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE profile (
@@ -31,7 +31,8 @@ class AppDatabase {
             due_date TEXT,
             next_period_due_date TEXT,
             postpartum_started_on TEXT,
-            postpartum_ended_on TEXT
+            postpartum_ended_on TEXT,
+            notifications_enabled INTEGER NOT NULL DEFAULT 1
           )
         ''');
         await db.execute('''
@@ -97,6 +98,12 @@ class AppDatabase {
               end_date TEXT NOT NULL
             )
           ''');
+        }
+        if (oldVersion < 6) {
+          await db.execute(
+            'ALTER TABLE profile ADD COLUMN notifications_enabled '
+            'INTEGER NOT NULL DEFAULT 1',
+          );
         }
       },
     );

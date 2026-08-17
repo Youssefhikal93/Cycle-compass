@@ -5,13 +5,21 @@ import 'models/intercourse_entry.dart';
 import 'models/life_stage_entry.dart';
 import 'models/period_entry.dart';
 import 'models/user_profile.dart';
+import 'services/cycle_notification_service.dart';
 
 class AppController extends ChangeNotifier {
-  AppController(this._database);
+  AppController(this._database, {CycleNotificationService? notificationService})
+    : _notificationService = notificationService,
+      _notificationPermissionGranted = notificationService == null;
 
-  AppController.inMemory() : _database = null;
+  AppController.inMemory()
+    : _database = null,
+      _notificationService = null,
+      _notificationPermissionGranted = true;
 
   final AppDatabase? _database;
+  final CycleNotificationService? _notificationService;
+  bool _notificationPermissionGranted;
   UserProfile? _profile;
   List<PeriodEntry> _periodEntries = const [];
   List<IntercourseEntry> _intercourseEntries = const [];
@@ -26,6 +34,9 @@ class AppController extends ChangeNotifier {
   List<DateTime> get periodStarts =>
       _periodEntries.map((entry) => entry.startDate).toList(growable: false);
   bool get isOnboarded => _profile != null;
+  bool get notificationsAllowed => _notificationPermissionGranted;
+  bool get needsNotificationPermission =>
+      _profile?.notificationsEnabled == true && !_notificationPermissionGranted;
 
   Future<void> load() async {
     final database = _database;
@@ -35,6 +46,9 @@ class AppController extends ChangeNotifier {
       _intercourseEntries = await database.readIntercourseEntries();
       _lifeStageEntries = await database.readLifeStageEntries();
     }
+    _notificationPermissionGranted =
+        await _notificationService?.notificationsAllowed() ?? true;
+    await _syncNotifications();
     notifyListeners();
   }
 
@@ -51,12 +65,14 @@ class AppController extends ChangeNotifier {
     _periodEntries = database == null
         ? [PeriodEntry(startDate: normalizedProfile.lastPeriodStart)]
         : await database.readPeriodEntries();
+    await _syncNotifications();
     notifyListeners();
   }
 
   Future<void> updateProfile(UserProfile profile) async {
     await _database?.saveProfile(profile);
     _profile = profile;
+    await _syncNotifications();
     notifyListeners();
   }
 
@@ -99,6 +115,8 @@ class AppController extends ChangeNotifier {
       trackingProfile,
       clearDueDate: normalized.isAfter(trackingProfile.lastPeriodStart),
     );
+    await _syncNotifications();
+    if (resumesAfterPregnancy) await _announceCurrentMode();
     notifyListeners();
   }
 
@@ -133,6 +151,7 @@ class AppController extends ChangeNotifier {
         ? current.copyWith(postpartumEndedOn: newDay)
         : current;
     await _syncLatestPeriod(syncedProfile);
+    await _syncNotifications();
     notifyListeners();
   }
 
@@ -156,6 +175,8 @@ class AppController extends ChangeNotifier {
           )
         : current;
     await _syncLatestPeriod(syncedProfile);
+    await _syncNotifications();
+    if (reopensPostpartum) await _announceCurrentMode();
     notifyListeners();
     return true;
   }
@@ -176,6 +197,7 @@ class AppController extends ChangeNotifier {
               )
               .toList()
         : await _database.readPeriodEntries();
+    await _syncNotifications();
     notifyListeners();
   }
 
@@ -199,8 +221,11 @@ class AppController extends ChangeNotifier {
       postpartumStartedOn: enabled && dueDate != null ? _day(dueDate) : null,
       postpartumEndedOn: null,
     );
+    final modeChanged = _trackingModeChanged(current, updated);
     await _database?.saveProfile(updated);
     _profile = updated;
+    await _syncNotifications();
+    if (modeChanged) await _announceCurrentMode();
     notifyListeners();
   }
 
@@ -216,6 +241,30 @@ class AppController extends ChangeNotifier {
     final updated = current.copyWith(nextPeriodDueDate: dueDate);
     await _database?.saveProfile(updated);
     _profile = updated;
+    await _syncNotifications();
+    notifyListeners();
+  }
+
+  Future<bool> enableNotifications() async {
+    final current = _profile;
+    if (current == null) return false;
+    final allowed = await _notificationService?.requestPermission() ?? true;
+    _notificationPermissionGranted = allowed;
+    final updated = current.copyWith(notificationsEnabled: allowed);
+    await _database?.saveProfile(updated);
+    _profile = updated;
+    await _syncNotifications();
+    notifyListeners();
+    return allowed;
+  }
+
+  Future<void> disableNotifications() async {
+    final current = _profile;
+    if (current == null) return;
+    final updated = current.copyWith(notificationsEnabled: false);
+    await _database?.saveProfile(updated);
+    _profile = updated;
+    await _syncNotifications();
     notifyListeners();
   }
 
@@ -356,12 +405,53 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> reset() async {
+    await _notificationService?.clear();
     await _database?.clearAllData();
     _profile = null;
     _periodEntries = const [];
     _intercourseEntries = const [];
     _lifeStageEntries = const [];
     notifyListeners();
+  }
+
+  Future<void> _syncNotifications() async {
+    final notificationService = _notificationService;
+    if (notificationService == null) return;
+    final current = _profile;
+    if (current == null ||
+        !current.notificationsEnabled ||
+        !_notificationPermissionGranted) {
+      await notificationService.cancelPendingCycleNotifications();
+      return;
+    }
+    await notificationService.reconcile(
+      profile: current,
+      periodStarts: periodStarts,
+    );
+  }
+
+  Future<void> _announceCurrentMode() async {
+    final notificationService = _notificationService;
+    final current = _profile;
+    if (notificationService == null ||
+        current == null ||
+        !current.notificationsEnabled ||
+        !_notificationPermissionGranted) {
+      return;
+    }
+    if (!current.isPregnant) {
+      return notificationService.showCycleTrackingResumed();
+    }
+    if (current.isPostpartumOn(DateTime.now())) {
+      return notificationService.showPostpartumMode();
+    }
+    return notificationService.showPregnancyMode();
+  }
+
+  bool _trackingModeChanged(UserProfile before, UserProfile after) {
+    final now = DateTime.now();
+    return before.isPregnant != after.isPregnant ||
+        before.isPostpartumOn(now) != after.isPostpartumOn(now);
   }
 }
 

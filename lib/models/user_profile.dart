@@ -12,6 +12,7 @@ class UserProfile {
     this.nextPeriodDueDate,
     this.postpartumStartedOn,
     this.postpartumEndedOn,
+    this.notificationsEnabled = true,
   });
 
   final String name;
@@ -26,6 +27,7 @@ class UserProfile {
   final DateTime? nextPeriodDueDate;
   final DateTime? postpartumStartedOn;
   final DateTime? postpartumEndedOn;
+  final bool notificationsEnabled;
 
   bool isPostpartumOn(DateTime date) {
     final expectedDueDate = dueDate;
@@ -74,6 +76,7 @@ class UserProfile {
     Object? nextPeriodDueDate = _unchanged,
     Object? postpartumStartedOn = _unchanged,
     Object? postpartumEndedOn = _unchanged,
+    bool? notificationsEnabled,
   }) => UserProfile(
     name: name ?? this.name,
     dateOfBirth: dateOfBirth ?? this.dateOfBirth,
@@ -99,6 +102,7 @@ class UserProfile {
     postpartumEndedOn: identical(postpartumEndedOn, _unchanged)
         ? this.postpartumEndedOn
         : postpartumEndedOn as DateTime?,
+    notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
   );
 
   String get initials {
@@ -134,6 +138,7 @@ class UserProfile {
     'postpartum_ended_on': postpartumEndedOn == null
         ? null
         : _dateOnly(postpartumEndedOn!),
+    'notifications_enabled': notificationsEnabled ? 1 : 0,
   };
 
   factory UserProfile.fromMap(Map<String, Object?> map) => UserProfile(
@@ -149,6 +154,7 @@ class UserProfile {
     nextPeriodDueDate: _optionalDate(map['next_period_due_date']),
     postpartumStartedOn: _optionalDate(map['postpartum_started_on']),
     postpartumEndedOn: _optionalDate(map['postpartum_ended_on']),
+    notificationsEnabled: (map['notifications_enabled'] as int? ?? 1) == 1,
   );
 }
 

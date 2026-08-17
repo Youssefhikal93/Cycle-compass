@@ -17,6 +17,7 @@ Flutter screens and widgets
 AppController (ChangeNotifier)
           │
           ├── CycleCalculator (pure calculation service)
+          ├── CycleNotificationService (Android local scheduling)
           │
           ▼
 AppDatabase (SQLite)
@@ -31,13 +32,16 @@ UserProfile + calendar-history models
   after changes.
 - `AppDatabase` converts SQLite rows to and from model objects.
 - `CycleCalculator` is stateless and performs estimates from supplied dates.
+- `CycleNotificationService` schedules reminders locally; Firebase and a
+  backend are not involved.
 - Dates used for cycle tracking are normalized to date-only `DateTime` values.
 
 ## Application startup and navigation
 
-1. `main()` initializes Flutter and opens `cycle_compass.db`.
-2. An `AppController` is created with the database and loads the saved profile
-   and period entries.
+1. `main()` initializes Flutter, opens `cycle_compass.db`, and initializes the
+   local notification service with the device time zone.
+2. An `AppController` is created with the database and notification service,
+   then loads the saved profile and calendar history.
 3. `CycleCompassApp` listens to the controller.
 4. If no profile exists, the app shows onboarding. If a profile exists, it
    shows the four-tab home shell.
@@ -72,7 +76,7 @@ is used by widget tests and golden previews.
 
 ## Persistence model
 
-The database is currently schema version 5 and contains four tables:
+The database is currently schema version 6 and contains four tables:
 
 ### `profile`
 
@@ -83,6 +87,7 @@ A single row with `id = 1`. It stores:
 - pregnancy flag, pregnancy start, and expected pregnancy due date;
 - an optional user-entered next-period due date;
 - postpartum tracking start and end dates.
+- whether cycle and mode-change notifications are enabled; the default is on.
 
 ### `period_entries`
 
@@ -104,8 +109,8 @@ type plus inclusive start and end dates. Ranges cannot overlap, and completed
 history cannot end in the future.
 
 All stored cycle dates use `YYYY-MM-DD` text. The database upgrade callback adds
-pregnancy, manual period due-date, postpartum, and intercourse columns for older
-users, and creates `life_stage_entries` when needed.
+pregnancy, manual period due-date, postpartum, intercourse, and notification
+columns for older users, and creates `life_stage_entries` when needed.
 
 ## Cycle calculation rules
 
@@ -211,6 +216,8 @@ The central state coordinator and mutation API.
 - Validates, sorts, and persists non-overlapping past pregnancy/postpartum
   ranges.
 - Clears all database state during reset.
+- Reconciles scheduled phase and mode-change reminders after tracking changes.
+- Requests Android notification permission and persists the default-on setting.
 - Offers an in-memory constructor for tests.
 
 New persistent user actions should normally be added here rather than directly
@@ -220,7 +227,7 @@ inside a screen.
 
 The SQLite adapter.
 
-- Opens `cycle_compass.db` at schema version 5.
+- Opens `cycle_compass.db` at schema version 6.
 - Creates and upgrades the `profile`, `period_entries`, `daily_logs`, and
   `life_stage_entries` tables.
 - Reads and replaces the single profile row.
@@ -238,7 +245,7 @@ SQL details and future schema migrations belong in this file.
 The immutable profile and tracking-status model.
 
 - Stores personal data, cycle defaults, pregnancy fields, the user-entered
-  next-period date, and postpartum tracking dates.
+  next-period date, postpartum tracking dates, and notification preference.
 - Derives active postpartum state and whether a calendar date belongs to the
   postpartum range.
 - Provides `copyWith`; nullable fields use a sentinel so callers can distinguish
@@ -279,6 +286,20 @@ The pure cycle-estimation domain service.
 It has no Flutter widgets, database access, or mutable state, so it is directly
 unit-testable.
 
+### `lib/services/cycle_notification_planner.dart`
+
+Builds the future around-9:00-AM reminder plan from the same `CycleCalculator`
+used by the UI. It emits each estimated phase transition, uses cautious
+ovulation copy, and replaces phase reminders with the expected due-date mode
+reminder while pregnancy tracking is active.
+
+### `lib/services/cycle_notification_service.dart`
+
+Initializes the Android local-notification plugin and device time zone,
+reconciles the next 180 days of reminders, schedules them to run during idle,
+and cancels only Cycle Compass-owned pending notifications. Android receivers
+restore scheduled reminders after reboot or an app update.
+
 ### `lib/screens/onboarding_screen.dart`
 
 The two-step first-run flow.
@@ -297,6 +318,8 @@ The post-onboarding navigation container.
 - Owns the selected bottom-navigation index.
 - Displays Today, Calendar, Learn, and Profile in an `IndexedStack`.
 - Lets Today open Profile by changing the selected index.
+- Explains and requests Android notification permission when default-on
+  reminders do not yet have permission.
 
 ### `lib/screens/today_screen.dart`
 
@@ -357,6 +380,7 @@ The complete local-data management screen.
 - Displays and edits name, date of birth, avatar, cycle length, and usual period
   length.
 - Allows a user-entered next menstrual period due date.
+- Lets the user turn all phase and mode-change reminders on or off.
 - Groups pregnancy and postpartum settings in one coupled section.
 - Adds, edits, and deletes completed pregnancy or postpartum history ranges in
   that section without changing current mode.
@@ -364,8 +388,8 @@ The complete local-data management screen.
   previous postpartum tracking dates.
 - Lists recent period entries and supports adding, moving, deleting, extending,
   shortening, or clearing an explicit bleeding end date.
-- Makes Personal details, Cycle settings, Pregnancy & postpartum, Period
-  history, and Privacy individually collapsible and initially expanded.
+- Makes Personal details, Cycle settings, Notifications, Pregnancy & postpartum,
+  Period history, and Privacy individually collapsible and initially expanded.
 - Deletes the managed avatar and all local database data after confirmation.
 
 Most editing is implemented with modal bottom sheets and date pickers, while

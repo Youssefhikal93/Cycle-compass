@@ -408,6 +408,7 @@ void main() {
         nextPeriodDueDate: DateTime(2026, 8, 29),
         postpartumStartedOn: DateTime(2027, 3, 12),
         postpartumEndedOn: DateTime(2027, 5, 1),
+        notificationsEnabled: false,
       );
 
       final restored = UserProfile.fromMap(profile.toMap());
@@ -418,6 +419,7 @@ void main() {
       expect(restored.nextPeriodDueDate, DateTime(2026, 8, 29));
       expect(restored.postpartumStartedOn, DateTime(2027, 3, 12));
       expect(restored.postpartumEndedOn, DateTime(2027, 5, 1));
+      expect(restored.notificationsEnabled, isFalse);
     });
 
     test('loads a legacy profile with pregnancy mode off', () {
@@ -437,6 +439,7 @@ void main() {
       expect(restored.nextPeriodDueDate, isNull);
       expect(restored.postpartumStartedOn, isNull);
       expect(restored.postpartumEndedOn, isNull);
+      expect(restored.notificationsEnabled, isTrue);
     });
   });
 
@@ -708,10 +711,7 @@ void main() {
     );
     expect(find.text('Protected sex'), findsOneWidget);
     expect(find.text('Unprotected sex'), findsNothing);
-    expect(
-      find.byIcon(Icons.health_and_safety_outlined),
-      findsNWidgets(2),
-    );
+    expect(find.byIcon(Icons.health_and_safety_outlined), findsNWidgets(2));
   });
 
   testWidgets('profile can add a completed postpartum history range', (
@@ -756,6 +756,47 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.lifeStageEntries.single.type, LifeStageType.postpartum);
+  });
+
+  testWidgets('cycle notifications are on by default and can be disabled', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Cycle notifications'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+
+    expect(controller.profile!.notificationsEnabled, isTrue);
+    expect(
+      find.text(
+        'On · every estimated phase and mode change around 9:00 AM',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(find.text('Cycle notifications'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cycle notifications'));
+    await tester.pumpAndSettle();
+
+    expect(controller.profile!.notificationsEnabled, isFalse);
+    expect(find.text('Off'), findsOneWidget);
   });
 
   testWidgets('profile sections are expanded by default and collapsible', (

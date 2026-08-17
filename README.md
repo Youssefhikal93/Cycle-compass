@@ -26,6 +26,8 @@ calendar predictions are clearly presented as estimates.
 - Postpartum calendar coloring until the first new period is recorded
 - Editable past pregnancy and postpartum ranges for historical tracking
 - Editable period history with one-tap extra-day adjustments
+- Default-on Android reminders for every estimated cycle phase around 9:00 AM and
+  for tracking-mode changes; scheduled reminders are restored after reboot
 - Local SQLite storage with Android cloud backup disabled
 - Delete-all-data privacy control
 - Responsive Material 3 interface with rendered phone-size preview tests
@@ -43,7 +45,7 @@ lib/
 ├── data/          SQLite database service
 ├── models/        Profile models
 ├── screens/       Onboarding and main app experiences
-├── services/      Cycle phase calculation
+├── services/      Cycle calculation and local notification scheduling
 ├── widgets/       Shared avatar UI
 ├── app_controller.dart
 └── main.dart
@@ -73,5 +75,5 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Full unit, widget, and golden-preview suite: 45 tests passing
-- Android debug APK: built, installed, and launched on an emulator
+- Full unit, widget, and golden-preview suite: 49 tests passing
+- Android debug APK: built successfully
