@@ -737,7 +737,7 @@ void main() {
       350,
       scrollable: find.byType(Scrollable).last,
     );
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -140));
+    await tester.ensureVisible(find.text('Add past pregnancy or postpartum'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Add past pregnancy or postpartum'));

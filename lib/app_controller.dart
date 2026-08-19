@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'data/app_database.dart';
+import 'services/backup_codec.dart';
 import 'services/clock.dart';
 import 'models/intercourse_entry.dart';
 import 'models/life_stage_entry.dart';
@@ -411,6 +412,104 @@ class AppController extends ChangeNotifier {
     _profile = updated;
   }
 
+  /// Collects everything stored on this device for a backup file.
+  Future<BackupPayload> createBackupPayload() async {
+    final database = _database;
+    final data = database == null
+        ? BackupData(
+            profile: _profile?.toMap(),
+            periodEntries: _periodEntries
+                .map(
+                  (entry) => <String, Object?>{
+                    'start_date': _dateOnly(entry.startDate),
+                    'end_date': entry.endDate == null
+                        ? null
+                        : _dateOnly(entry.endDate!),
+                    'source': 'user',
+                  },
+                )
+                .toList(growable: false),
+            dailyLogs: _intercourseEntries
+                .map(
+                  (entry) => <String, Object?>{
+                    'log_date': _dateOnly(entry.date),
+                    'intercourse_protection':
+                        entry.protectionStatus.storageValue,
+                  },
+                )
+                .toList(growable: false),
+            lifeStageEntries: _lifeStageEntries
+                .map(
+                  (entry) => <String, Object?>{
+                    'id': entry.id,
+                    'stage_type': entry.type.storageValue,
+                    'start_date': _dateOnly(entry.startDate),
+                    'end_date': _dateOnly(entry.endDate),
+                  },
+                )
+                .toList(growable: false),
+          )
+        : await database.exportAllData();
+    return BackupPayload(exportedAt: appNow(), data: data);
+  }
+
+  /// Replaces all local data with [payload] and reloads the app state.
+  ///
+  /// The payload is already validated by [BackupCodec], so the write either
+  /// lands completely or leaves the previous data in place.
+  Future<void> restoreBackup(BackupPayload payload) async {
+    final database = _database;
+    if (database == null) {
+      final profileRow = payload.data.profile;
+      _profile = profileRow == null ? null : UserProfile.fromMap(profileRow);
+      _periodEntries =
+          payload.data.periodEntries
+              .map(
+                (row) => PeriodEntry(
+                  startDate: DateTime.parse(row['start_date']! as String),
+                  endDate: row['end_date'] == null
+                      ? null
+                      : DateTime.parse(row['end_date']! as String),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => b.startDate.compareTo(a.startDate));
+      _intercourseEntries =
+          payload.data.dailyLogs
+              .where((row) => row['intercourse_protection'] != null)
+              .map(
+                (row) => IntercourseEntry(
+                  date: DateTime.parse(row['log_date']! as String),
+                  protectionStatus: protectionStatusFromStorage(
+                    row['intercourse_protection']! as String,
+                  ),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => b.date.compareTo(a.date));
+      _lifeStageEntries =
+          payload.data.lifeStageEntries
+              .map(
+                (row) => LifeStageEntry(
+                  id: row['id'] as int?,
+                  type: lifeStageTypeFromStorage(row['stage_type']! as String),
+                  startDate: DateTime.parse(row['start_date']! as String),
+                  endDate: DateTime.parse(row['end_date']! as String),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => b.startDate.compareTo(a.startDate));
+    } else {
+      await database.importAllData(payload.data);
+      _profile = await database.readProfile();
+      _periodEntries = await database.readPeriodEntries();
+      _intercourseEntries = await database.readIntercourseEntries();
+      _lifeStageEntries = await database.readLifeStageEntries();
+    }
+    await _syncNotifications();
+    notifyListeners();
+  }
+
   Future<void> reset() async {
     await _notificationService?.clear();
     await _database?.clearAllData();
@@ -463,3 +562,8 @@ class AppController extends ChangeNotifier {
 }
 
 DateTime _day(DateTime date) => DateTime(date.year, date.month, date.day);
+
+String _dateOnly(DateTime date) =>
+    '${date.year.toString().padLeft(4, '0')}-'
+    '${date.month.toString().padLeft(2, '0')}-'
+    '${date.day.toString().padLeft(2, '0')}';

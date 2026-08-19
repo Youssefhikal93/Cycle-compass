@@ -18,6 +18,7 @@ AppController (ChangeNotifier)
           │
           ├── CycleCalculator (pure calculation service)
           ├── CycleNotificationService (Android local scheduling)
+          ├── BackupCodec + BackupService (backup file format and file/share IO)
           │
           ▼
 AppDatabase (SQLite)
@@ -35,6 +36,10 @@ UserProfile + calendar-history models
 - `CycleNotificationService` schedules reminders locally; Firebase and a
   backend are not involved.
 - Dates used for cycle tracking are normalized to date-only `DateTime` values.
+- All "current time" reads go through the overridable `appNow()` function in
+  `lib/services/clock.dart` instead of `DateTime.now()`. Golden tests pin it to
+  a fixed date so rendered screenshots stay stable over time; new code should
+  keep using `appNow()`.
 
 ## Application startup and navigation
 
@@ -111,6 +116,42 @@ history cannot end in the future.
 All stored cycle dates use `YYYY-MM-DD` text. The database upgrade callback adds
 pregnancy, manual period due-date, postpartum, intercourse, and notification
 columns for older users, and creates `life_stage_entries` when needed.
+
+## Backup file format
+
+Backups are single UTF-8 JSON files with the `.ccbackup` extension, named
+`cycle-compass-YYYY-MM-DD.ccbackup`. The app never uploads them; the export
+flow writes a temporary file in app-private storage and hands it to the
+Android share sheet, so the user decides where the file goes.
+
+Every file starts with the same envelope header:
+
+```json
+{"format": "cycle-compass-backup", "version": 1, "encrypted": false,
+ "exportedAt": "<ISO-8601>", ...}
+```
+
+- Plain files carry the payload directly in a `data` object with four keys —
+  `profile` (object or null), `periodEntries`, `dailyLogs`, and
+  `lifeStageEntries` — whose rows mirror the SQLite column names.
+- Encrypted files (the default) add `kdf` (PBKDF2-HMAC-SHA256, 210,000
+  iterations, base64 16-byte salt), `cipher` (AES-256-GCM, base64 12-byte
+  nonce), `ciphertext` (base64 encrypted bytes of the JSON-encoded `data`
+  object), and `mac` (base64 16-byte GCM authentication tag).
+
+Restore safety rules, enforced by `BackupCodec` before anything is written:
+
+- files with the wrong `format` value, malformed JSON, or a `version` newer
+  than the app are rejected with user-readable messages;
+- KDF iterations read from the file are bounded (1–2,000,000) so a hostile
+  file cannot stall the app;
+- every row is validated column by column: unknown columns are dropped, enum
+  columns must hold known values, dates must parse, and duplicate
+  `start_date`/`log_date`/`id` keys are rejected up front;
+- a wrong passphrase and a tampered file both fail GCM authentication and
+  surface as one retryable passphrase error;
+- the database import replaces all four tables in a single transaction, so a
+  restore either lands completely or leaves the previous data untouched.
 
 ## Cycle calculation rules
 
@@ -196,7 +237,8 @@ The executable entry point and application composition root.
 - `CycleCompassApp` selects onboarding or the main application based on
   `controller.isOnboarded`.
 - Defines the shared Material 3 theme: color scheme, typography, input fields,
-  buttons, navigation bar, and snackbars.
+  buttons, navigation bar, and snackbars. Light and dark themes are built from
+  the same seed color and follow the system setting (`ThemeMode.system`).
 
 This is the best place for application-wide initialization and theme changes.
 
@@ -213,8 +255,13 @@ The central state coordinator and mutation API.
   dates synchronized with history changes.
 - Enforces pregnancy/postpartum transition rules.
 - Adds or replaces one intercourse status per date.
+- Rejects moving a period start onto a date that already has another entry, so
+  an edit can never silently merge or destroy an existing record.
 - Validates, sorts, and persists non-overlapping past pregnancy/postpartum
   ranges.
+- Builds backup payloads (`createBackupPayload`) and restores them
+  (`restoreBackup`), in both the SQLite and in-memory modes, resyncing
+  notifications afterwards.
 - Clears all database state during reset.
 - Reconciles scheduled phase and mode-change reminders after tracking changes.
 - Requests Android notification permission and persists the default-on setting.
@@ -236,6 +283,8 @@ The SQLite adapter.
 - Inserts, updates, reads, and deletes `life_stage_entries`.
 - Uses a transaction when moving a period start so a compatible end date is
   preserved.
+- Exports every row of every table for backups (`exportAllData`) and replaces
+  all tables from a validated backup in one transaction (`importAllData`).
 - Deletes all local rows transactionally.
 
 SQL details and future schema migrations belong in this file.
@@ -286,6 +335,30 @@ The pure cycle-estimation domain service.
 It has no Flutter widgets, database access, or mutable state, so it is directly
 unit-testable.
 
+### `lib/services/clock.dart`
+
+A one-line overridable clock: `appNow`, defaulting to `DateTime.now`. All code
+in `lib/` reads the current moment through it (the only exception is the
+millisecond timestamp inside avatar file names). Tests — especially golden
+screenshot tests — pin it to a fixed date for reproducible output.
+
+### `lib/services/backup_codec.dart`
+
+The pure-Dart backup file format: envelope encode/decode, PBKDF2 key
+derivation, AES-256-GCM encrypt/decrypt, and full payload validation. Defines
+`BackupData`, `BackupPayload`, `BackupEnvelope`, and the sealed
+`BackupException` hierarchy (`BackupFormatException`,
+`BackupPassphraseException`) whose messages are written for end users. It has
+no Flutter imports, so the whole format is unit-testable. See the "Backup file
+format" section above for the envelope layout and validation rules.
+
+### `lib/services/backup_service.dart`
+
+The thin file and platform layer for backups: writes the export to a temporary
+app-private file and opens the Android share sheet (`share_plus`), and reads a
+user-picked file back as text (`file_picker`). Everything that touches a
+platform channel lives here so `BackupCodec` stays a plain Dart unit.
+
 ### `lib/services/cycle_notification_planner.dart`
 
 Builds the future around-9:00-AM reminder plan from the same `CycleCalculator`
@@ -331,7 +404,9 @@ In normal tracking mode it:
   next-period due date;
 - corrects the menstruation phase using an explicitly recorded bleeding end;
 - displays the cycle ring, confidence basis, phase journey, education card,
-  next-period wording, and “period started today” action.
+  next-period wording, and “period started today” action;
+- lets the user tap any phase tile to preview that phase in the education card
+  below, with a highlight border and a "Back to my phase" action.
 
 When `profile.isPregnant` is true, it switches to `_PregnancyTodayView`:
 
@@ -347,7 +422,9 @@ Calendar.
 
 The month grid, date-management UI, and month explanation layer.
 
-- Navigates between months and calculates each cell's phase.
+- Navigates between months with the arrow buttons or a horizontal swipe, and
+  shows a jump-back-to-current-month button when another month is displayed.
+- Calculates each cell's phase.
 - Opens one day editor for protected/unprotected sex and period actions.
 - Uses explicit period ranges before estimated bleeding lengths.
 - Marks period starts, manual next-period due dates, pregnancy due dates, today,
@@ -388,8 +465,13 @@ The complete local-data management screen.
   previous postpartum tracking dates.
 - Lists recent period entries and supports adding, moving, deleting, extending,
   shortening, or clearing an explicit bleeding end date.
+- Exports and imports backups: the export sheet encrypts with a passphrase by
+  default (with a confirm field and a plain-export warning), and the import
+  flow picks a file, asks for the passphrase when needed (with retry), and
+  requires explicit confirmation before replacing all local data.
 - Makes Personal details, Cycle settings, Notifications, Pregnancy & postpartum,
-  Period history, and Privacy individually collapsible and initially expanded.
+  Backup & restore, Period history, and Privacy individually collapsible and
+  initially expanded.
 - Deletes the managed avatar and all local database data after confirmation.
 
 Most editing is implemented with modal bottom sheets and date pickers, while
@@ -417,6 +499,8 @@ Shared avatar presentation and local image management.
 | Add a persisted profile field | model, `app_database.dart`, controller, migration |
 | Add a calendar history type | model, `app_database.dart`, controller, Calendar and Profile |
 | Change cycle math | `services/cycle_calculator.dart` and unit tests |
+| Change the backup format | `services/backup_codec.dart`, bump `backupFormatVersion`, unit tests |
+| Change backup sharing/picking | `services/backup_service.dart` |
 | Change pregnancy/postpartum rules | `user_profile.dart`, `app_controller.dart`, relevant screens |
 | Change calendar colors or cell markers | `screens/calendar_screen.dart` |
 | Add a new bottom tab | `screens/home_shell.dart` plus a new screen |

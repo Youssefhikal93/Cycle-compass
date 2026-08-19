@@ -5,6 +5,7 @@ import '../models/intercourse_entry.dart';
 import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
+import '../services/backup_codec.dart';
 
 class AppDatabase {
   AppDatabase._(this._database);
@@ -296,6 +297,49 @@ class AppDatabase {
           ),
         )
         .toList(growable: false);
+  }
+
+  /// Reads every row of every table for a backup file.
+  Future<BackupData> exportAllData() async {
+    final profileRows = await _database.query('profile', limit: 1);
+    return BackupData(
+      profile: profileRows.isEmpty ? null : profileRows.first,
+      periodEntries: await _database.query(
+        'period_entries',
+        orderBy: 'start_date',
+      ),
+      dailyLogs: await _database.query('daily_logs', orderBy: 'log_date'),
+      lifeStageEntries: await _database.query(
+        'life_stage_entries',
+        orderBy: 'start_date',
+      ),
+    );
+  }
+
+  /// Replaces every table with [data] in one transaction.
+  ///
+  /// Rows are validated by the backup codec before they get here, so either the
+  /// whole restore lands or the transaction rolls back untouched.
+  Future<void> importAllData(BackupData data) async {
+    await _database.transaction((transaction) async {
+      await transaction.delete('life_stage_entries');
+      await transaction.delete('daily_logs');
+      await transaction.delete('period_entries');
+      await transaction.delete('profile');
+      final profile = data.profile;
+      if (profile != null) {
+        await transaction.insert('profile', {...profile, 'id': 1});
+      }
+      for (final row in data.periodEntries) {
+        await transaction.insert('period_entries', row);
+      }
+      for (final row in data.dailyLogs) {
+        await transaction.insert('daily_logs', row);
+      }
+      for (final row in data.lifeStageEntries) {
+        await transaction.insert('life_stage_entries', row);
+      }
+    });
   }
 
   Future<void> clearAllData() async {

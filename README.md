@@ -29,7 +29,11 @@ calendar predictions are clearly presented as estimates.
 - Default-on Android reminders for every estimated cycle phase around 9:00 AM and
   for tracking-mode changes; scheduled reminders are restored after reboot
 - Local SQLite storage with Android cloud backup disabled
+- Manual backup export and restore: a single `.ccbackup` file handed to the
+  Android share sheet, encrypted with a passphrase by default (AES-256-GCM,
+  PBKDF2), validated fully before any restore touches existing data
 - Delete-all-data privacy control
+- Light and dark themes following the system setting
 - Responsive Material 3 interface with rendered phone-size preview tests
 
 ## Preview
@@ -45,7 +49,7 @@ lib/
 ├── data/          SQLite database service
 ├── models/        Profile models
 ├── screens/       Onboarding and main app experiences
-├── services/      Cycle calculation and local notification scheduling
+├── services/      Cycle calculation, notifications, backup, overridable clock
 ├── widgets/       Shared avatar UI
 ├── app_controller.dart
 └── main.dart
@@ -75,5 +79,6 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Full unit, widget, and golden-preview suite: 49 tests passing
+- Full unit, widget, and golden-preview suite: 70 tests passing
+- Golden previews render with a pinned clock, so they are stable over time
 - Android debug APK: built successfully

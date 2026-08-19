@@ -7,14 +7,23 @@ import '../app_controller.dart';
 import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
+import '../services/backup_codec.dart';
+import '../services/backup_service.dart';
 import '../services/clock.dart';
 import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key, required this.controller});
+  const ProfileScreen({
+    super.key,
+    required this.controller,
+    this.backupService = const BackupService(),
+    this.backupCodec = const BackupCodec(),
+  });
 
   final AppController controller;
+  final BackupService backupService;
+  final BackupCodec backupCodec;
 
   @override
   Widget build(BuildContext context) {
@@ -244,6 +253,24 @@ class ProfileScreen extends StatelessWidget {
                 onTap: profile.isPregnant && !isPostpartum
                     ? null
                     : () => _addPeriodDate(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
+            title: 'Backup & restore',
+            children: [
+              _SettingTile(
+                icon: Icons.save_alt_rounded,
+                label: 'Export backup',
+                value: 'Save a copy of your data as a file you keep',
+                onTap: () => _exportBackup(context),
+              ),
+              _SettingTile(
+                icon: Icons.restore_page_outlined,
+                label: 'Import backup',
+                value: 'Restore from a backup file you saved earlier',
+                onTap: () => _importBackup(context),
               ),
             ],
           ),
@@ -619,6 +646,131 @@ class ProfileScreen extends StatelessWidget {
     if (confirmed == true) await controller.deleteLifeStageEntry(entry);
   }
 
+  Future<void> _exportBackup(BuildContext context) async {
+    final options = await showModalBottomSheet<_ExportOptions>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => const _ExportBackupSheet(),
+    );
+    if (options == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final payload = await controller.createBackupPayload();
+      final passphrase = options.passphrase;
+      final contents = passphrase == null
+          ? backupCodec.encode(payload)
+          : await backupCodec.encodeEncrypted(payload, passphrase: passphrase);
+      await backupService.shareBackup(contents);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Backup file ready to save or send.')),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('The backup could not be created. Please try again.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _importBackup(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final String? contents;
+    try {
+      contents = await backupService.readPickedBackup();
+    } on BackupException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('That file could not be opened.')),
+      );
+      return;
+    }
+    if (contents == null) return;
+    final BackupEnvelope envelope;
+    try {
+      envelope = backupCodec.readEnvelope(contents);
+    } on BackupException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    }
+    if (!context.mounted) return;
+    final payload = envelope.isEncrypted
+        ? await _openEncryptedBackup(context, envelope, messenger)
+        : await _openBackup(envelope, messenger);
+    if (payload == null || !context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore this backup?'),
+        content: Text(
+          'Restore backup from '
+          '${DateFormat.yMMMMd().format(payload.exportedAt)}? This replaces '
+          'ALL current data on this device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await controller.restoreBackup(payload);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Backup from ${DateFormat.yMMMd().format(payload.exportedAt)} '
+          'restored.',
+        ),
+      ),
+    );
+  }
+
+  Future<BackupPayload?> _openBackup(
+    BackupEnvelope envelope,
+    ScaffoldMessengerState messenger, {
+    String? passphrase,
+  }) async {
+    try {
+      return await backupCodec.open(envelope, passphrase: passphrase);
+    } on BackupException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      return null;
+    }
+  }
+
+  Future<BackupPayload?> _openEncryptedBackup(
+    BuildContext context,
+    BackupEnvelope envelope,
+    ScaffoldMessengerState messenger,
+  ) async {
+    String? errorText;
+    while (true) {
+      final passphrase = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => _PassphraseDialog(errorText: errorText),
+      );
+      if (passphrase == null || !context.mounted) return null;
+      try {
+        return await backupCodec.open(envelope, passphrase: passphrase);
+      } on BackupPassphraseException catch (error) {
+        if (!context.mounted) return null;
+        errorText = error.message;
+      } on BackupException catch (error) {
+        messenger.showSnackBar(SnackBar(content: Text(error.message)));
+        return null;
+      }
+    }
+  }
+
   Future<void> _confirmReset(BuildContext context, UserProfile profile) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -784,6 +936,202 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
       ),
     );
   }
+}
+
+class _ExportOptions {
+  const _ExportOptions({this.passphrase});
+
+  /// Null when the person chose to export without encryption.
+  final String? passphrase;
+}
+
+class _ExportBackupSheet extends StatefulWidget {
+  const _ExportBackupSheet();
+
+  @override
+  State<_ExportBackupSheet> createState() => _ExportBackupSheetState();
+}
+
+class _ExportBackupSheetState extends State<_ExportBackupSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _passphraseController = TextEditingController();
+  final _confirmController = TextEditingController();
+  bool _encrypt = true;
+
+  @override
+  void dispose() {
+    _passphraseController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          0,
+          24,
+          MediaQuery.viewInsetsOf(context).bottom + 24,
+        ),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Export backup',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'The file holds your profile, period dates, and history. '
+                'Nothing is sent anywhere — you choose where it goes.',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 14),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Encrypt with passphrase (recommended)'),
+                subtitle: Text(
+                  _encrypt
+                      ? 'You will need this passphrase to restore the file.'
+                      : 'The file will be readable as plain text.',
+                ),
+                value: _encrypt,
+                onChanged: (value) => setState(() => _encrypt = value),
+              ),
+              if (_encrypt) ...[
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _passphraseController,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Passphrase',
+                    prefixIcon: Icon(Icons.lock_outline_rounded),
+                  ),
+                  validator: (value) => (value?.length ?? 0) < 6
+                      ? 'Use at least 6 characters'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _confirmController,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm passphrase',
+                    prefixIcon: Icon(Icons.lock_outline_rounded),
+                  ),
+                  validator: (value) => value == _passphraseController.text
+                      ? null
+                      : 'The two passphrases do not match',
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'There is no way to recover a forgotten passphrase.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ] else
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Without a passphrase, anyone who opens the file can read '
+                    'your data.',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _export,
+                  child: const Text('Create backup file'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _export() {
+    if (_encrypt && !(_formKey.currentState?.validate() ?? false)) return;
+    Navigator.pop(
+      context,
+      _ExportOptions(passphrase: _encrypt ? _passphraseController.text : null),
+    );
+  }
+}
+
+class _PassphraseDialog extends StatefulWidget {
+  const _PassphraseDialog({this.errorText});
+
+  final String? errorText;
+
+  @override
+  State<_PassphraseDialog> createState() => _PassphraseDialogState();
+}
+
+class _PassphraseDialogState extends State<_PassphraseDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Enter the backup passphrase'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('This backup is encrypted.'),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _controller,
+          obscureText: true,
+          autofocus: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          decoration: InputDecoration(
+            labelText: 'Passphrase',
+            errorText: widget.errorText,
+            errorMaxLines: 3,
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _controller.text),
+        child: const Text('Open backup'),
+      ),
+    ],
+  );
 }
 
 enum _PeriodAction { edit, editEnd, addDay, removeDay, clearEnd, delete }
