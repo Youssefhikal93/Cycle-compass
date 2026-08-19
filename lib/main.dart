@@ -29,7 +29,9 @@ class CycleCompassApp extends StatelessWidget {
     return MaterialApp(
       title: 'Cycle Compass',
       debugShowCheckedModeBanner: false,
-      theme: _theme(),
+      theme: _theme(Brightness.light),
+      darkTheme: _theme(Brightness.dark),
+      themeMode: ThemeMode.system,
       home: AnimatedBuilder(
         animation: controller,
         builder: (context, _) => AnimatedSwitcher(
@@ -46,12 +48,12 @@ class CycleCompassApp extends StatelessWidget {
   }
 }
 
-ThemeData _theme() {
+ThemeData _theme(Brightness brightness) {
   const seed = Color(0xFFB73D68);
   final scheme = ColorScheme.fromSeed(
     seedColor: seed,
-    brightness: Brightness.light,
-    surface: const Color(0xFFFFFBFC),
+    brightness: brightness,
+    surface: brightness == Brightness.light ? const Color(0xFFFFFBFC) : null,
   );
   return ThemeData(
     useMaterial3: true,

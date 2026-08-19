@@ -5,6 +5,7 @@ import 'package:timezone/data/latest.dart' as timezone_data;
 import 'package:timezone/timezone.dart' as timezone;
 
 import '../models/user_profile.dart';
+import 'clock.dart';
 import 'cycle_notification_planner.dart';
 
 const _notificationPayloadPrefix = 'cycle-compass:';
@@ -79,7 +80,7 @@ class CycleNotificationService {
   }) async {
     if (!_initialized) return;
     await cancelPendingCycleNotifications();
-    final now = DateTime.now();
+    final now = appNow();
     final through = profile.isPregnant && profile.dueDate != null
         ? profile.dueDate!
         : now.add(_notificationHorizon);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
+import '../services/clock.dart';
 import '../models/user_profile.dart';
 import '../widgets/profile_avatar.dart';
 
@@ -20,7 +21,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _profileKey = GlobalKey<FormState>();
   int _page = 0;
   DateTime? _dateOfBirth;
-  DateTime _lastPeriodStart = DateTime.now();
+  DateTime _lastPeriodStart = appNow();
   double _cycleLength = 28;
   double _periodLength = 5;
   String? _avatarPath;
@@ -112,11 +113,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ? null
                           : (_page == 0 ? _next : _finish),
                       child: _saving
-                          ? const SizedBox.square(
+                          ? SizedBox.square(
                               dimension: 20,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: Colors.white,
+                                color: Theme.of(context).colorScheme.onPrimary,
                               ),
                             )
                           : Text(_page == 0 ? 'Continue' : 'See my cycle'),
@@ -337,7 +338,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _pickDateOfBirth() async {
-    final now = DateTime.now();
+    final now = appNow();
     final picked = await showDatePicker(
       context: context,
       initialDate: _dateOfBirth ?? DateTime(now.year - 25, now.month, now.day),
@@ -349,7 +350,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _pickLastPeriod() async {
-    final now = DateTime.now();
+    final now = appNow();
     final picked = await showDatePicker(
       context: context,
       initialDate: _lastPeriodStart,
@@ -451,13 +452,17 @@ class _InfoStrip extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: const Color(0xFFF3F0FA),
+      color: Theme.of(context).colorScheme.secondaryContainer,
       borderRadius: BorderRadius.circular(16),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 20, color: const Color(0xFF65558F)),
+        Icon(
+          icon,
+          size: 20,
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Text(

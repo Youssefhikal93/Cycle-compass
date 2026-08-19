@@ -31,13 +31,16 @@ class LearnScreen extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: const Color(0xFFF3F0FA),
+              color: Theme.of(context).colorScheme.secondaryContainer,
               borderRadius: BorderRadius.circular(22),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.layers_outlined, color: Color(0xFF65558F)),
+                Icon(
+                  Icons.layers_outlined,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -189,7 +192,9 @@ class _LearnCard extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: .72),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.surface.withValues(alpha: .72),
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Text(

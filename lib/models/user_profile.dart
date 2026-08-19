@@ -1,3 +1,5 @@
+import '../services/clock.dart';
+
 class UserProfile {
   const UserProfile({
     required this.name,
@@ -58,7 +60,7 @@ class UserProfile {
     }
 
     if (!isPregnant || dueDate == null) return false;
-    final limitDate = through ?? DateTime.now();
+    final limitDate = through ?? appNow();
     final limit = DateTime(limitDate.year, limitDate.month, limitDate.day);
     return !day.isAfter(limit);
   }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cycle_compass/app_controller.dart';
 import 'package:cycle_compass/main.dart';
 import 'package:cycle_compass/models/user_profile.dart';
+import 'package:cycle_compass/services/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,11 @@ void main() {
   const phoneSize = Size(412, 915);
 
   setUpAll(_loadRobotoForPreviews);
+
+  // Golden screenshots depend on "today", so pin the clock to keep the
+  // rendered output identical no matter when the suite runs.
+  setUp(() => appNow = () => DateTime(2026, 3, 18, 10));
+  tearDown(() => appNow = DateTime.now);
 
   testWidgets('renders onboarding preview', (tester) async {
     await tester.binding.setSurfaceSize(phoneSize);
@@ -41,13 +47,13 @@ void main() {
       UserProfile(
         name: 'Nadia Rahman',
         dateOfBirth: DateTime(1997, 4, 16),
-        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
+        lastPeriodStart: appNow().subtract(const Duration(days: 8)),
         cycleLength: 28,
         periodLength: 5,
       ),
     );
     await controller.setNextPeriodDueDate(
-      DateTime.now().add(const Duration(days: 20)),
+      appNow().add(const Duration(days: 20)),
     );
     const previewKey = ValueKey('home-preview');
 
@@ -69,7 +75,7 @@ void main() {
     await tester.binding.setSurfaceSize(phoneSize);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = AppController.inMemory();
-    final today = DateTime.now();
+    final today = appNow();
     await controller.completeOnboarding(
       UserProfile(
         name: 'Nadia Rahman',
@@ -103,7 +109,7 @@ void main() {
     await tester.binding.setSurfaceSize(phoneSize);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = AppController.inMemory();
-    final today = DateTime.now();
+    final today = appNow();
     await controller.completeOnboarding(
       UserProfile(
         name: 'Nadia Rahman',
@@ -143,7 +149,7 @@ void main() {
       UserProfile(
         name: 'Nadia Rahman',
         dateOfBirth: DateTime(1997, 4, 16),
-        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
+        lastPeriodStart: appNow().subtract(const Duration(days: 8)),
         cycleLength: 28,
         periodLength: 5,
       ),
@@ -170,7 +176,7 @@ void main() {
     await tester.binding.setSurfaceSize(phoneSize);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = AppController.inMemory();
-    final now = DateTime.now();
+    final now = appNow();
     final latest = DateTime(now.year, now.month, 1);
     await controller.completeOnboarding(
       UserProfile(

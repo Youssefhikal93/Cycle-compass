@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'data/app_database.dart';
+import 'services/clock.dart';
 import 'models/intercourse_entry.dart';
 import 'models/life_stage_entry.dart';
 import 'models/period_entry.dart';
@@ -125,6 +126,12 @@ class AppController extends ChangeNotifier {
     if (current == null) return;
     final oldDay = _day(oldDate);
     final newDay = _day(newDate);
+    if (oldDay != newDay &&
+        _periodEntries.any((entry) => entry.startDate == newDay)) {
+      throw ArgumentError(
+        'Another period already starts on that date. Delete it first or pick a different day.',
+      );
+    }
     final changesFirstPostpartumPeriod =
         current.postpartumEndedOn != null &&
         _day(current.postpartumEndedOn!) == oldDay;
@@ -215,7 +222,7 @@ class AppController extends ChangeNotifier {
     final updated = current.copyWith(
       isPregnant: enabled,
       pregnancyStartedOn: enabled
-          ? current.pregnancyStartedOn ?? _day(DateTime.now())
+          ? current.pregnancyStartedOn ?? _day(appNow())
           : null,
       dueDate: enabled && dueDate != null ? _day(dueDate) : null,
       postpartumStartedOn: enabled && dueDate != null ? _day(dueDate) : null,
@@ -281,7 +288,7 @@ class AppController extends ChangeNotifier {
     ProtectionStatus protectionStatus,
   ) async {
     final normalizedDate = _day(date);
-    if (normalizedDate.isAfter(_day(DateTime.now()))) {
+    if (normalizedDate.isAfter(_day(appNow()))) {
       throw ArgumentError('Intercourse cannot be recorded in the future.');
     }
     final entry = IntercourseEntry(
@@ -349,7 +356,7 @@ class AppController extends ChangeNotifier {
     if (entry.endDate.isBefore(entry.startDate)) {
       throw ArgumentError('The history end date cannot be before its start.');
     }
-    if (entry.endDate.isAfter(_day(DateTime.now()))) {
+    if (entry.endDate.isAfter(_day(appNow()))) {
       throw ArgumentError('Past history cannot end in the future.');
     }
     if (_overlapsSavedLifeStage(entry)) {
@@ -442,14 +449,14 @@ class AppController extends ChangeNotifier {
     if (!current.isPregnant) {
       return notificationService.showCycleTrackingResumed();
     }
-    if (current.isPostpartumOn(DateTime.now())) {
+    if (current.isPostpartumOn(appNow())) {
       return notificationService.showPostpartumMode();
     }
     return notificationService.showPregnancyMode();
   }
 
   bool _trackingModeChanged(UserProfile before, UserProfile after) {
-    final now = DateTime.now();
+    final now = appNow();
     return before.isPregnant != after.isPregnant ||
         before.isPostpartumOn(now) != after.isPostpartumOn(now);
   }

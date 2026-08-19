@@ -7,6 +7,7 @@ import '../app_controller.dart';
 import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
+import '../services/clock.dart';
 import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
@@ -19,7 +20,7 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final profile = controller.profile!;
     final latestEntry = controller.periodEntries.first;
-    final isPostpartum = profile.isPostpartumOn(DateTime.now());
+    final isPostpartum = profile.isPostpartumOn(appNow());
     final historyLength = const CycleCalculator().estimatedCycleLength(
       periodStarts: controller.periodStarts,
       configuredLength: profile.cycleLength,
@@ -289,7 +290,7 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Future<void> _addPeriodDate(BuildContext context) async {
-    final now = DateTime.now();
+    final now = appNow();
     final profile = controller.profile!;
     final isPostpartum = profile.isPostpartumOn(now);
     final earliest = isPostpartum ? profile.dueDate! : DateTime(1900);
@@ -361,7 +362,7 @@ class ProfileScreen extends StatelessWidget {
       await controller.setNextPeriodDueDate(null);
       return;
     }
-    final today = DateTime.now();
+    final today = appNow();
     final firstDate = profile.lastPeriodStart.add(const Duration(days: 1));
     final automatic = const CycleCalculator()
         .calculate(
@@ -394,7 +395,7 @@ class ProfileScreen extends StatelessWidget {
   Future<void> _editPeriodDate(BuildContext context, PeriodEntry entry) async {
     final date = entry.startDate;
     final usualLength = controller.profile!.periodLength;
-    final today = DateTime.now();
+    final today = appNow();
     final effectiveEnd =
         entry.endDate ?? date.add(Duration(days: usualLength - 1));
     final extraDay = effectiveEnd.add(const Duration(days: 1));
@@ -532,7 +533,15 @@ class ProfileScreen extends StatelessWidget {
       lastDate: today,
       helpText: 'Change period start date',
     );
-    if (picked != null) await controller.updatePeriodStart(date, picked);
+    if (picked == null || !context.mounted) return;
+    try {
+      await controller.updatePeriodStart(date, picked);
+    } on ArgumentError catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message?.toString() ?? 'Invalid date.')),
+      );
+    }
   }
 
   Future<void> _openPregnancySettings(
@@ -753,7 +762,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
   }
 
   Future<void> _pickBirthDate() async {
-    final now = DateTime.now();
+    final now = appNow();
     final picked = await showDatePicker(
       context: context,
       initialDate: _dateOfBirth,
@@ -922,7 +931,7 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
   );
 
   Future<void> _pickStartDate() async {
-    final today = _day(DateTime.now());
+    final today = _day(appNow());
     final initialEnd = _endDate ?? today;
     final suggestedDays = switch (_type) {
       LifeStageType.pregnancy => 280,
@@ -940,7 +949,7 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
   }
 
   Future<void> _pickEndDate() async {
-    final today = _day(DateTime.now());
+    final today = _day(appNow());
     final initialDate = _endDate ?? today;
     final picked = await showDatePicker(
       context: context,
@@ -997,7 +1006,7 @@ class _PregnancySettingsSheetState extends State<_PregnancySettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final isPostpartum = widget.profile.isPostpartumOn(DateTime.now());
+    final isPostpartum = widget.profile.isPostpartumOn(appNow());
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
@@ -1098,7 +1107,7 @@ class _PregnancySettingsSheetState extends State<_PregnancySettingsSheet> {
   }
 
   Future<void> _pickDueDate() async {
-    final today = DateTime.now();
+    final today = appNow();
     final picked = await showDatePicker(
       context: context,
       initialDate: _dueDate ?? today.add(const Duration(days: 140)),
@@ -1197,36 +1206,48 @@ class _PrivacyGroup extends StatelessWidget {
   const _PrivacyGroup();
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: const Color(0xFFF0F7F4),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-    clipBehavior: Clip.antiAlias,
-    child: ExpansionTile(
-      key: const PageStorageKey<String>('profile-section-privacy'),
-      initiallyExpanded: true,
-      maintainState: true,
-      tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 3),
-      childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-      shape: const Border(),
-      collapsedShape: const Border(),
-      iconColor: const Color(0xFF26715A),
-      collapsedIconColor: const Color(0xFF26715A),
-      leading: const Icon(Icons.shield_outlined, color: Color(0xFF26715A)),
-      title: const Text(
-        'Private by design',
-        style: TextStyle(color: Color(0xFF225B49), fontWeight: FontWeight.w800),
-      ),
-      children: [
-        Text(
-          'Your profile and cycle history are stored only on this device. Android cloud backup is disabled.',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: const Color(0xFF3A6758),
-            height: 1.4,
-          ),
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final background = isDark
+        ? const Color(0xFF1E332B)
+        : const Color(0xFFF0F7F4);
+    final accent = isDark ? const Color(0xFF7FC7AC) : const Color(0xFF26715A);
+    final titleColor = isDark
+        ? const Color(0xFFA5D6C1)
+        : const Color(0xFF225B49);
+    final bodyColor = isDark
+        ? const Color(0xFF9CC0B1)
+        : const Color(0xFF3A6758);
+    return Material(
+      color: background,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        key: const PageStorageKey<String>('profile-section-privacy'),
+        initiallyExpanded: true,
+        maintainState: true,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 3),
+        childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        iconColor: accent,
+        collapsedIconColor: accent,
+        leading: Icon(Icons.shield_outlined, color: accent),
+        title: Text(
+          'Private by design',
+          style: TextStyle(color: titleColor, fontWeight: FontWeight.w800),
         ),
-      ],
-    ),
-  );
+        children: [
+          Text(
+            'Your profile and cycle history are stored only on this device. Android cloud backup is disabled.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: bodyColor, height: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SettingTile extends StatelessWidget {

@@ -6,16 +6,25 @@ import '../models/intercourse_entry.dart';
 import '../models/life_stage_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
+import '../services/clock.dart';
 import '../services/cycle_calculator.dart';
 import 'today_screen.dart';
 
 const _pregnancyColor = Color(0xFF8D4D72);
-const _pregnancyBackground = Color(0xFFF2DFEA);
 const _postpartumColor = Color(0xFF8A6652);
-const _postpartumBackground = Color(0xFFE7DDD7);
 const _protectedSexColor = Color(0xFF26715A);
 const _unprotectedSexColor = Color(0xFFB14962);
 const _ovulationFlowerColor = Color(0xFFD49A19);
+
+Color _pregnancyBackground(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF4A3040)
+    : const Color(0xFFF2DFEA);
+
+Color _postpartumBackground(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFF41352C)
+    : const Color(0xFFE7DDD7);
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key, required this.controller});
@@ -32,17 +41,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
+    final now = appNow();
     _visibleMonth = DateTime(now.year, now.month);
   }
 
   @override
   Widget build(BuildContext context) {
     final profile = widget.controller.profile!;
-    final isPostpartum = profile.isPostpartumOn(DateTime.now());
+    final isPostpartum = profile.isPostpartumOn(appNow());
     final pregnancyActive = profile.isPregnant && !isPostpartum;
     final calculator = const CycleCalculator();
-    final today = DateTime.now();
+    final today = appNow();
     final estimatedLength = calculator.estimatedCycleLength(
       periodStarts: widget.controller.periodStarts,
       configuredLength: profile.cycleLength,
@@ -101,78 +110,96 @@ class _CalendarScreenState extends State<CalendarScreen> {
               ),
             ),
             const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.outlineVariant,
+            GestureDetector(
+              onHorizontalDragEnd: (details) {
+                final velocity = details.primaryVelocity ?? 0;
+                if (velocity.abs() < 150) return;
+                _moveMonth(velocity < 0 ? 1 : -1);
+              },
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
                 ),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      IconButton(
-                        tooltip: 'Previous month',
-                        onPressed: () => _moveMonth(-1),
-                        icon: const Icon(Icons.chevron_left_rounded),
-                      ),
-                      Expanded(
-                        child: Text(
-                          DateFormat.yMMMM().format(_visibleMonth),
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w800),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Previous month',
+                          onPressed: () => _moveMonth(-1),
+                          icon: const Icon(Icons.chevron_left_rounded),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: 'Next month',
-                        onPressed: () => _moveMonth(1),
-                        icon: const Icon(Icons.chevron_right_rounded),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  const Row(
-                    children: [
-                      _WeekLabel('M'),
-                      _WeekLabel('T'),
-                      _WeekLabel('W'),
-                      _WeekLabel('T'),
-                      _WeekLabel('F'),
-                      _WeekLabel('S'),
-                      _WeekLabel('S'),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 7,
-                          mainAxisSpacing: 5,
-                          crossAxisSpacing: 3,
+                        Expanded(
+                          child: Text(
+                            DateFormat.yMMMM().format(_visibleMonth),
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
                         ),
-                    itemCount: leading + daysInMonth,
-                    itemBuilder: (context, index) {
-                      if (index < leading) return const SizedBox.shrink();
-                      final dayState = monthDays[index - leading];
-                      return _DayCell(
-                        dayState: dayState,
-                        onTap: dayState.date.isAfter(today)
-                            ? null
-                            : () => _openDayEditor(
-                                context,
-                                dayState,
-                                pregnancyActive,
+                        if (!DateUtils.isSameMonth(_visibleMonth, today))
+                          IconButton(
+                            tooltip: 'Back to this month',
+                            onPressed: () => setState(
+                              () => _visibleMonth = DateTime(
+                                today.year,
+                                today.month,
                               ),
-                      );
-                    },
-                  ),
-                ],
+                            ),
+                            icon: const Icon(Icons.today_rounded),
+                          ),
+                        IconButton(
+                          tooltip: 'Next month',
+                          onPressed: () => _moveMonth(1),
+                          icon: const Icon(Icons.chevron_right_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Row(
+                      children: [
+                        _WeekLabel('M'),
+                        _WeekLabel('T'),
+                        _WeekLabel('W'),
+                        _WeekLabel('T'),
+                        _WeekLabel('F'),
+                        _WeekLabel('S'),
+                        _WeekLabel('S'),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 7,
+                            mainAxisSpacing: 5,
+                            crossAxisSpacing: 3,
+                          ),
+                      itemCount: leading + daysInMonth,
+                      itemBuilder: (context, index) {
+                        if (index < leading) return const SizedBox.shrink();
+                        final dayState = monthDays[index - leading];
+                        return _DayCell(
+                          dayState: dayState,
+                          onTap: dayState.date.isAfter(today)
+                              ? null
+                              : () => _openDayEditor(
+                                  context,
+                                  dayState,
+                                  pregnancyActive,
+                                ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -331,7 +358,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   Future<void> _addPeriodDate(BuildContext context) async {
-    final now = DateTime.now();
+    final now = appNow();
     final profile = widget.controller.profile!;
     final isPostpartum = profile.isPostpartumOn(now);
     final picked = await showDatePicker(
@@ -402,7 +429,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     BuildContext context,
     PeriodEntry entry,
   ) async {
-    final now = DateTime.now();
+    final now = appNow();
     final effectiveEnd =
         entry.endDate ??
         entry.startDate.add(
@@ -518,8 +545,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
       lastDate: now,
       helpText: 'Change period start date',
     );
-    if (picked != null) {
-      await widget.controller.updatePeriodStart(entry.startDate, picked);
+    if (picked != null && context.mounted) {
+      try {
+        await widget.controller.updatePeriodStart(entry.startDate, picked);
+      } on ArgumentError catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message?.toString() ?? 'Invalid date.')),
+        );
+      }
     }
   }
 }
@@ -680,11 +714,16 @@ class _MonthSummaryCard extends StatelessWidget {
     final hasRangeNotice = insights.any(
       (insight) => insight.outsideCommonAdultRange,
     );
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final color = hasRangeNotice
         ? Theme.of(context).colorScheme.error
+        : isDark
+        ? const Color(0xFFE5B87A)
         : const Color(0xFF9A5719);
     final background = hasRangeNotice
         ? Theme.of(context).colorScheme.errorContainer.withValues(alpha: .55)
+        : isDark
+        ? const Color(0xFF3A2E1D)
         : const Color(0xFFFFF4E8);
     return Container(
       padding: const EdgeInsets.all(18),
@@ -718,6 +757,8 @@ class _MonthSummaryCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: hasRangeNotice
                         ? Theme.of(context).colorScheme.onErrorContainer
+                        : isDark
+                        ? const Color(0xFFD9C1A0)
                         : const Color(0xFF6F4219),
                     height: 1.45,
                   ),
@@ -843,9 +884,9 @@ class _DayCell extends StatelessWidget {
     final color = stageColor ?? _dayCellColor(context, dayState);
     return Material(
       color: stageType == LifeStageType.pregnancy
-          ? _pregnancyBackground
+          ? _pregnancyBackground(context)
           : stageType == LifeStageType.postpartum
-          ? _postpartumBackground
+          ? _postpartumBackground(context)
           : dayState.phase == null
           ? Theme.of(context).colorScheme.surfaceContainerHighest
           : color.withValues(
@@ -914,7 +955,7 @@ class _DayCell extends StatelessWidget {
       width: 7,
       height: 7,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         shape: BoxShape.circle,
         border: Border.all(
           color: Theme.of(context).colorScheme.primary,
@@ -1017,7 +1058,7 @@ class _DueDateLegend extends StatelessWidget {
         width: 10,
         height: 10,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           shape: BoxShape.circle,
           border: Border.all(
             color: Theme.of(context).colorScheme.primary,
@@ -1112,7 +1153,7 @@ class _PregnancyDueDateLegend extends StatelessWidget {
         width: 10,
         height: 10,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           shape: BoxShape.circle,
           border: Border.all(color: _postpartumColor, width: 2),
         ),

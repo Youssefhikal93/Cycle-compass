@@ -4,10 +4,11 @@ import 'package:intl/intl.dart';
 import '../app_controller.dart';
 import '../models/user_profile.dart';
 import '../models/period_entry.dart';
+import '../services/clock.dart';
 import '../services/cycle_calculator.dart';
 import '../widgets/profile_avatar.dart';
 
-class TodayScreen extends StatelessWidget {
+class TodayScreen extends StatefulWidget {
   const TodayScreen({
     super.key,
     required this.controller,
@@ -18,16 +19,25 @@ class TodayScreen extends StatelessWidget {
   final VoidCallback onOpenProfile;
 
   @override
+  State<TodayScreen> createState() => _TodayScreenState();
+}
+
+class _TodayScreenState extends State<TodayScreen> {
+  CyclePhase? _previewPhase;
+
+  AppController get controller => widget.controller;
+
+  @override
   Widget build(BuildContext context) {
     final profile = controller.profile!;
     if (profile.isPregnant) {
       return _PregnancyTodayView(
         controller: controller,
         profile: profile,
-        onOpenProfile: onOpenProfile,
+        onOpenProfile: widget.onOpenProfile,
       );
     }
-    final now = DateTime.now();
+    final now = appNow();
     final calculatedSnapshot = const CycleCalculator().calculate(
       onDate: now,
       lastPeriodStart: profile.lastPeriodStart,
@@ -44,6 +54,7 @@ class TodayScreen extends StatelessWidget {
       ),
     );
     final phaseColor = colorForPhase(snapshot.phase);
+    final surface = Theme.of(context).colorScheme.surface;
     return SafeArea(
       child: CustomScrollView(
         slivers: [
@@ -81,7 +92,7 @@ class TodayScreen extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: 'Open profile',
-                    onPressed: onOpenProfile,
+                    onPressed: widget.onOpenProfile,
                     icon: ProfileAvatar(
                       name: profile.name,
                       avatarPath: profile.avatarPath,
@@ -100,7 +111,7 @@ class TodayScreen extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [phaseColor.withValues(alpha: .16), Colors.white],
+                      colors: [phaseColor.withValues(alpha: .16), surface],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -156,7 +167,7 @@ class TodayScreen extends StatelessWidget {
                           vertical: 12,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: .82),
+                          color: surface.withValues(alpha: .82),
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: Row(
@@ -200,12 +211,23 @@ class TodayScreen extends StatelessWidget {
                       return _PhaseTile(
                         phase: phase,
                         selected: snapshot.phase == phase,
+                        previewed: _previewPhase == phase,
+                        onTap: () => setState(
+                          () => _previewPhase = phase == snapshot.phase
+                              ? null
+                              : phase,
+                        ),
                       );
                     },
                   ),
                 ),
                 const SizedBox(height: 24),
-                _InsightCard(phase: snapshot.phase),
+                _InsightCard(
+                  phase: _previewPhase ?? snapshot.phase,
+                  isPreview:
+                      _previewPhase != null && _previewPhase != snapshot.phase,
+                  onClosePreview: () => setState(() => _previewPhase = null),
+                ),
                 const SizedBox(height: 14),
                 FilledButton.icon(
                   onPressed: () => _confirmPeriodStart(context),
@@ -252,7 +274,7 @@ class TodayScreen extends StatelessWidget {
       ),
     );
     if (confirmed != true) return;
-    await controller.logPeriodStart(DateTime.now());
+    await controller.logPeriodStart(appNow());
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Period start logged. Today is Day 1.')),
@@ -294,10 +316,11 @@ class _PregnancyTodayView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPostpartum = profile.isPostpartumOn(DateTime.now());
+    final isPostpartum = profile.isPostpartumOn(appNow());
     final color = isPostpartum
         ? const Color(0xFF397A6B)
         : const Color(0xFF9B4D73);
+    final surface = Theme.of(context).colorScheme.surface;
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
@@ -344,7 +367,7 @@ class _PregnancyTodayView extends StatelessWidget {
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [color.withValues(alpha: .18), Colors.white],
+                colors: [color.withValues(alpha: .18), surface],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -394,7 +417,7 @@ class _PregnancyTodayView extends StatelessWidget {
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: .82),
+                      color: surface.withValues(alpha: .82),
                       borderRadius: BorderRadius.circular(18),
                     ),
                     child: Row(
@@ -452,7 +475,7 @@ class _PregnancyTodayView extends StatelessWidget {
   }
 
   Future<void> _logFirstPostpartumPeriod(BuildContext context) async {
-    final today = DateTime.now();
+    final today = appNow();
     final dueDate = profile.dueDate!;
     final firstDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
     final picked = await showDatePicker(
@@ -586,54 +609,76 @@ String _nextPeriodText({
 }
 
 class _PhaseTile extends StatelessWidget {
-  const _PhaseTile({required this.phase, required this.selected});
+  const _PhaseTile({
+    required this.phase,
+    required this.selected,
+    required this.previewed,
+    required this.onTap,
+  });
 
   final CyclePhase phase;
   final bool selected;
+  final bool previewed;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final color = colorForPhase(phase);
-    return Container(
-      width: 118,
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: selected ? color : color.withValues(alpha: .09),
+    return Material(
+      color: selected ? color : color.withValues(alpha: .09),
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
+        side: previewed && !selected
+            ? BorderSide(color: color, width: 2)
+            : BorderSide.none,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(iconForPhase(phase), color: selected ? Colors.white : color),
-          const Spacer(),
-          Text(
-            phase.label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: selected ? Colors.white : color,
-              fontWeight: FontWeight.w800,
-            ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          width: 118,
+          padding: const EdgeInsets.all(13),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(iconForPhase(phase), color: selected ? Colors.white : color),
+              const Spacer(),
+              Text(
+                phase.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : color,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                selected ? 'You are here' : 'Learn more',
+                style: TextStyle(
+                  color: selected
+                      ? Colors.white.withValues(alpha: .82)
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 11,
+                ),
+              ),
+            ],
           ),
-          Text(
-            selected ? 'You are here' : 'Learn more',
-            style: TextStyle(
-              color: selected
-                  ? Colors.white.withValues(alpha: .82)
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 11,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
 class _InsightCard extends StatelessWidget {
-  const _InsightCard({required this.phase});
+  const _InsightCard({
+    required this.phase,
+    this.isPreview = false,
+    this.onClosePreview,
+  });
 
   final CyclePhase phase;
+  final bool isPreview;
+  final VoidCallback? onClosePreview;
 
   @override
   Widget build(BuildContext context) {
@@ -680,7 +725,7 @@ class _InsightCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  details.$1,
+                  isPreview ? '${phase.label} · ${details.$1}' : details.$1,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -693,6 +738,14 @@ class _InsightCard extends StatelessWidget {
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (isPreview)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: onClosePreview,
+                      child: const Text('Back to my phase'),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -717,7 +770,7 @@ IconData iconForPhase(CyclePhase phase) => switch (phase) {
 };
 
 String _greeting() {
-  final hour = DateTime.now().hour;
+  final hour = appNow().hour;
   if (hour < 12) return 'Good morning';
   if (hour < 18) return 'Good afternoon';
   return 'Good evening';

@@ -784,9 +784,7 @@ void main() {
 
     expect(controller.profile!.notificationsEnabled, isTrue);
     expect(
-      find.text(
-        'On · every estimated phase and mode change around 9:00 AM',
-      ),
+      find.text('On · every estimated phase and mode change around 9:00 AM'),
       findsOneWidget,
     );
 
