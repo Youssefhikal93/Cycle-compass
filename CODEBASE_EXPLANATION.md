@@ -81,7 +81,7 @@ is used by widget tests and golden previews.
 
 ## Persistence model
 
-The database is currently schema version 6 and contains four tables:
+The database is currently schema version 7 and contains four tables:
 
 ### `profile`
 
@@ -90,7 +90,9 @@ A single row with `id = 1`. It stores:
 - name, date of birth, and optional managed avatar path;
 - latest period start, configured cycle length, and configured period length;
 - pregnancy flag, pregnancy start, and expected pregnancy due date;
-- an optional user-entered next-period due date;
+- the theme preference (system, light, or dark);
+- a retained-but-unused `next_period_due_date` column (the manual override
+  feature was removed; old backups containing it still restore);
 - postpartum tracking start and end dates.
 - whether cycle and mode-change notifications are enabled; the default is on.
 
@@ -114,8 +116,8 @@ type plus inclusive start and end dates. Ranges cannot overlap, and completed
 history cannot end in the future.
 
 All stored cycle dates use `YYYY-MM-DD` text. The database upgrade callback adds
-pregnancy, manual period due-date, postpartum, intercourse, and notification
-columns for older users, and creates `life_stage_entries` when needed.
+pregnancy, postpartum, intercourse, notification, and theme columns for older
+users, and creates `life_stage_entries` when needed.
 
 ## Backup file format
 
@@ -163,9 +165,11 @@ Its estimate source has the following practical precedence:
 2. Otherwise, recent valid recorded intervals are used. The calculator takes
    the median of up to six recent intervals between 15 and 60 days, limiting
    the effect of an outlier.
-3. If the user set a next-period due date after the latest start, that date
-   overrides the automatic future estimate.
-4. If there is not enough history, the configured cycle length is used.
+3. If there is not enough history, the configured cycle length is used.
+
+The next period is always derived automatically; there is no manual override.
+The Profile screen shows the derived date as read-only information, and logging
+the real period on the calendar naturally corrects the estimate.
 
 The estimated ovulation day is approximately cycle length minus 14 and is
 clamped so it occurs after the bleeding estimate and before the next period.
@@ -219,8 +223,8 @@ Synchronization rules are enforced in `AppController`, not only in the UI:
 - deleting that first period reopens postpartum mode;
 - moving the first postpartum period before the postpartum start is rejected.
 
-The pregnancy due date (`dueDate`) and the optional next menstrual period due
-date (`nextPeriodDueDate`) are intentionally separate concepts.
+The pregnancy due date (`dueDate`) is unrelated to menstrual next-period
+estimates, which are always derived automatically from cycle data.
 
 Completed pregnancy and postpartum history is stored separately from the
 current-mode profile fields. This lets users add, edit, and delete past ranges
@@ -238,7 +242,14 @@ The executable entry point and application composition root.
   `controller.isOnboarded`.
 - Defines the shared Material 3 theme: color scheme, typography, input fields,
   buttons, navigation bar, and snackbars. Light and dark themes are built from
-  the same seed color and follow the system setting (`ThemeMode.system`).
+  the same seed color; the active mode comes from the saved theme preference
+  (system, light, or dark) exposed by the controller.
+- Sets the app locale to day-first `en_GB`, so date pickers accept manual
+  entry as DD/MM/YYYY and displayed dates read like "19 August 2026".
+  `initializeAppLocale()` loads the date symbols and is shared with tests.
+- The Android launch screen (blood-drop logo on a themed surface, with dark
+  variants and Android 12+ styles) and the adaptive launcher icon live under
+  `android/app/src/main/res/`.
 
 This is the best place for application-wide initialization and theme changes.
 
@@ -251,8 +262,9 @@ The central state coordinator and mutation API.
 - Loads and persists data through `AppDatabase`.
 - Completes onboarding and creates the initial period entry.
 - Adds, edits, deletes, and adjusts period ranges.
-- Keeps `lastPeriodStart`, manual next-period due dates, and postpartum end
-  dates synchronized with history changes.
+- Keeps `lastPeriodStart` and postpartum end dates synchronized with history
+  changes.
+- Exposes the persisted theme preference and `setThemeMode(...)`.
 - Enforces pregnancy/postpartum transition rules.
 - Adds or replaces one intercourse status per date.
 - Rejects moving a period start onto a date that already has another entry, so
@@ -274,7 +286,7 @@ inside a screen.
 
 The SQLite adapter.
 
-- Opens `cycle_compass.db` at schema version 6.
+- Opens `cycle_compass.db` at schema version 7.
 - Creates and upgrades the `profile`, `period_entries`, `daily_logs`, and
   `life_stage_entries` tables.
 - Reads and replaces the single profile row.
@@ -294,7 +306,8 @@ SQL details and future schema migrations belong in this file.
 The immutable profile and tracking-status model.
 
 - Stores personal data, cycle defaults, pregnancy fields, the user-entered
-  next-period date, postpartum tracking dates, and notification preference.
+  postpartum tracking dates, notification preference, and theme preference
+  (stored as text, exposed as Flutter's `ThemeMode`).
 - Derives active postpartum state and whether a calendar date belongs to the
   postpartum range.
 - Provides `copyWith`; nullable fields use a sentinel so callers can distinguish
@@ -328,9 +341,8 @@ The pure cycle-estimation domain service.
 - `CycleSnapshot` contains phase, cycle day, effective length, cycle anchors,
   next period, estimated ovulation, and confidence basis.
 - `CycleIntervalInsight` describes early/late comparisons and range warnings.
-- `CycleCalculator` handles recorded cycles, median history estimates, manual
-  due-date overrides, phase assignment, negative-date rollover, normalization,
-  and monthly insights.
+- `CycleCalculator` handles recorded cycles, median history estimates, phase
+  assignment, negative-date rollover, normalization, and monthly insights.
 
 It has no Flutter widgets, database access, or mutable state, so it is directly
 unit-testable.
@@ -400,8 +412,7 @@ The main current-day experience.
 
 In normal tracking mode it:
 
-- calculates today's snapshot from profile defaults, history, and any manual
-  next-period due date;
+- calculates today's snapshot from profile defaults and logged history;
 - corrects the menstruation phase using an explicitly recorded bleeding end;
 - displays the cycle ring, confidence basis, phase journey, education card,
   next-period wording, and “period started today” action;
@@ -422,13 +433,14 @@ Calendar.
 
 The month grid, date-management UI, and month explanation layer.
 
-- Navigates between months with the arrow buttons or a horizontal swipe, and
+- Navigates between months with the arrow buttons, a horizontal swipe, or a
+  tap on the month title, which opens month/year scroll wheels, and
   shows a jump-back-to-current-month button when another month is displayed.
 - Calculates each cell's phase.
 - Opens one day editor for protected/unprotected sex and period actions.
 - Uses explicit period ranges before estimated bleeding lengths.
-- Marks period starts, manual next-period due dates, pregnancy due dates, today,
-  and recorded bleeding days.
+- Marks period starts, today, and recorded bleeding days, and shows a baby
+  icon on the expected pregnancy due date.
 - Pauses phase coloring during pregnancy.
 - Colors postpartum days muted brown and gives the expected pregnancy due date
   a matching outline.
@@ -437,7 +449,7 @@ The month grid, date-management UI, and month explanation layer.
 - Adds/manages period starts and recorded end dates from dialogs and bottom
   sheets, including “add one more day.”
 - Shows legends and a monthly summary for early/late intervals, duration
-  differences, manual due dates, and cautious range guidance. A legend appears
+  differences, and cautious range guidance. A legend appears
   only when its phase or event occurs in the displayed month.
 
 ### `lib/screens/learn_screen.dart`
@@ -456,7 +468,8 @@ The complete local-data management screen.
 
 - Displays and edits name, date of birth, avatar, cycle length, and usual period
   length.
-- Allows a user-entered next menstrual period due date.
+- Shows the automatically derived next-period date as read-only information.
+- Offers the theme preference (System / Light / Dark) in an Appearance group.
 - Lets the user turn all phase and mode-change reminders on or off.
 - Groups pregnancy and postpartum settings in one coupled section.
 - Adds, edits, and deletes completed pregnancy or postpartum history ranges in
@@ -506,6 +519,8 @@ Shared avatar presentation and local image management.
 | Add a new bottom tab | `screens/home_shell.dart` plus a new screen |
 | Add profile editing behavior | `screens/profile_screen.dart`, then controller if persistent |
 | Change avatar behavior | `widgets/profile_avatar.dart` |
+| Change splash screen or launcher icon | `android/app/src/main/res/` (drawables, mipmaps, values/values-v31 styles and colors) |
+| Change date locale/format | `lib/main.dart` (`appLocale`, `initializeAppLocale`) |
 
 ## Safety and product boundaries
 

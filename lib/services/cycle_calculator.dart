@@ -1,11 +1,6 @@
 enum CyclePhase { menstruation, follicular, ovulation, luteal }
 
-enum CycleEstimateBasis {
-  configuredLength,
-  recentHistory,
-  manualDueDate,
-  recordedCycle,
-}
+enum CycleEstimateBasis { configuredLength, recentHistory, recordedCycle }
 
 enum CycleTiming { firstRecorded, onExpectedDay, early, late }
 
@@ -92,7 +87,6 @@ class CycleCalculator {
     required int cycleLength,
     required int periodLength,
     List<DateTime> periodStarts = const [],
-    DateTime? nextPeriodDueDate,
   }) {
     final date = _day(onDate);
     final lastStart = _day(lastPeriodStart);
@@ -112,29 +106,19 @@ class CycleCalculator {
       }
     }
 
-    var predictedLength = estimatedCycleLength(
+    final predictedLength = estimatedCycleLength(
       periodStarts: starts,
       configuredLength: cycleLength,
     );
     final anchor = date.isBefore(starts.first) ? starts.first : starts.last;
-    var estimateBasis = starts.length > 1
-        ? CycleEstimateBasis.recentHistory
-        : CycleEstimateBasis.configuredLength;
-    final manualDueDate = nextPeriodDueDate == null
-        ? null
-        : _day(nextPeriodDueDate);
-    if (manualDueDate != null &&
-        manualDueDate.isAfter(starts.last) &&
-        !date.isBefore(starts.last)) {
-      predictedLength = manualDueDate.difference(starts.last).inDays;
-      estimateBasis = CycleEstimateBasis.manualDueDate;
-    }
     return _estimatedSnapshot(
       date: date,
       lastStart: anchor,
       cycleLength: predictedLength,
       periodLength: periodLength,
-      estimateBasis: estimateBasis,
+      estimateBasis: starts.length > 1
+          ? CycleEstimateBasis.recentHistory
+          : CycleEstimateBasis.configuredLength,
     );
   }
 

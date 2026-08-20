@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 
 import 'data/app_database.dart';
 import 'services/backup_codec.dart';
@@ -36,6 +37,7 @@ class AppController extends ChangeNotifier {
   List<DateTime> get periodStarts =>
       _periodEntries.map((entry) => entry.startDate).toList(growable: false);
   bool get isOnboarded => _profile != null;
+  ThemeMode get themeMode => _profile?.themeMode ?? ThemeMode.system;
   bool get notificationsAllowed => _notificationPermissionGranted;
   bool get needsNotificationPermission =>
       _profile?.notificationsEnabled == true && !_notificationPermissionGranted;
@@ -113,10 +115,7 @@ class AppController extends ChangeNotifier {
             ..._periodEntries.where((entry) => entry.startDate != normalized),
           ]
         : await _database.readPeriodEntries();
-    await _syncLatestPeriod(
-      trackingProfile,
-      clearDueDate: normalized.isAfter(trackingProfile.lastPeriodStart),
-    );
+    await _syncLatestPeriod(trackingProfile);
     await _syncNotifications();
     if (resumesAfterPregnancy) await _announceCurrentMode();
     notifyListeners();
@@ -237,19 +236,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setNextPeriodDueDate(DateTime? date) async {
+  Future<void> setThemeMode(ThemeMode themeMode) async {
     final current = _profile;
     if (current == null) return;
-    final dueDate = date == null ? null : _day(date);
-    if (dueDate != null && !dueDate.isAfter(current.lastPeriodStart)) {
-      throw ArgumentError(
-        'The due date must be after the latest period start.',
-      );
-    }
-    final updated = current.copyWith(nextPeriodDueDate: dueDate);
+    final updated = current.copyWith(themeMode: themeMode);
     await _database?.saveProfile(updated);
     _profile = updated;
-    await _syncNotifications();
     notifyListeners();
   }
 
@@ -394,19 +386,11 @@ class AppController extends ChangeNotifier {
         : ids.reduce((highestId, id) => highestId > id ? highestId : id) + 1;
   }
 
-  Future<void> _syncLatestPeriod(
-    UserProfile current, {
-    bool clearDueDate = false,
-  }) async {
+  Future<void> _syncLatestPeriod(UserProfile current) async {
     _periodEntries.sort((a, b) => b.startDate.compareTo(a.startDate));
     if (_periodEntries.isEmpty) return;
-    final latest = _periodEntries.first.startDate;
-    final dueDate = current.nextPeriodDueDate;
-    final shouldClearDueDate =
-        clearDueDate || (dueDate != null && !dueDate.isAfter(latest));
     final updated = current.copyWith(
-      lastPeriodStart: latest,
-      nextPeriodDueDate: shouldClearDueDate ? null : dueDate,
+      lastPeriodStart: _periodEntries.first.startDate,
     );
     await _database?.saveProfile(updated);
     _profile = updated;

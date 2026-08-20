@@ -3,10 +3,14 @@ import 'package:cycle_compass/main.dart';
 import 'package:cycle_compass/models/intercourse_entry.dart';
 import 'package:cycle_compass/models/life_stage_entry.dart';
 import 'package:cycle_compass/models/user_profile.dart';
+import 'package:cycle_compass/services/clock.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  setUpAll(initializeAppLocale);
+
   group('period history management', () {
     late AppController controller;
 
@@ -91,20 +95,13 @@ void main() {
       expect(controller.periodEntries.single.durationDays, 5);
     });
 
-    test(
-      'stores a due date and clears it after a newer actual start',
-      () async {
-        await controller.setNextPeriodDueDate(DateTime(2026, 8, 29));
-        expect(controller.profile!.nextPeriodDueDate, DateTime(2026, 8, 29));
+    test('a newer actual start becomes the cycle anchor', () async {
+      await controller.logPeriodStart(DateTime(2026, 7, 15));
+      expect(controller.profile!.lastPeriodStart, DateTime(2026, 8, 1));
 
-        await controller.logPeriodStart(DateTime(2026, 7, 15));
-        expect(controller.profile!.nextPeriodDueDate, DateTime(2026, 8, 29));
-
-        await controller.logPeriodStart(DateTime(2026, 8, 25));
-        expect(controller.profile!.nextPeriodDueDate, isNull);
-        expect(controller.profile!.lastPeriodStart, DateTime(2026, 8, 25));
-      },
-    );
+      await controller.logPeriodStart(DateTime(2026, 8, 25));
+      expect(controller.profile!.lastPeriodStart, DateTime(2026, 8, 25));
+    });
   });
 
   group('calendar event history', () {
@@ -405,10 +402,10 @@ void main() {
         isPregnant: true,
         pregnancyStartedOn: DateTime(2026, 8, 9),
         dueDate: DateTime(2027, 3, 12),
-        nextPeriodDueDate: DateTime(2026, 8, 29),
         postpartumStartedOn: DateTime(2027, 3, 12),
         postpartumEndedOn: DateTime(2027, 5, 1),
         notificationsEnabled: false,
+        themeMode: ThemeMode.dark,
       );
 
       final restored = UserProfile.fromMap(profile.toMap());
@@ -416,10 +413,10 @@ void main() {
       expect(restored.isPregnant, isTrue);
       expect(restored.pregnancyStartedOn, DateTime(2026, 8, 9));
       expect(restored.dueDate, DateTime(2027, 3, 12));
-      expect(restored.nextPeriodDueDate, DateTime(2026, 8, 29));
       expect(restored.postpartumStartedOn, DateTime(2027, 3, 12));
       expect(restored.postpartumEndedOn, DateTime(2027, 5, 1));
       expect(restored.notificationsEnabled, isFalse);
+      expect(restored.themeMode, ThemeMode.dark);
     });
 
     test('loads a legacy profile with pregnancy mode off', () {
@@ -436,10 +433,10 @@ void main() {
       expect(restored.isPregnant, isFalse);
       expect(restored.pregnancyStartedOn, isNull);
       expect(restored.dueDate, isNull);
-      expect(restored.nextPeriodDueDate, isNull);
       expect(restored.postpartumStartedOn, isNull);
       expect(restored.postpartumEndedOn, isNull);
       expect(restored.notificationsEnabled, isTrue);
+      expect(restored.themeMode, ThemeMode.system);
     });
   });
 
@@ -546,7 +543,7 @@ void main() {
       300,
       scrollable: find.byType(Scrollable).last,
     );
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -160));
+    await tester.ensureVisible(find.text('Latest period'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Latest period'));
     await tester.pumpAndSettle();
@@ -606,75 +603,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('The uterine lining is shedding.'), findsOneWidget);
-  });
-
-  testWidgets('manual period due date appears on Today and Calendar', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(412, 915));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final controller = AppController.inMemory();
-    final today = DateTime.now();
-    final start = today.subtract(const Duration(days: 8));
-    final dueDate = today.add(const Duration(days: 12));
-    await controller.completeOnboarding(
-      UserProfile(
-        name: 'Nadia Rahman',
-        dateOfBirth: DateTime(1997, 4, 16),
-        lastPeriodStart: start,
-        cycleLength: 28,
-        periodLength: 5,
-      ),
-    );
-    await controller.setNextPeriodDueDate(dueDate);
-    await tester.pumpWidget(CycleCompassApp(controller: controller));
-    await tester.pumpAndSettle();
-
-    expect(find.text('DATE SET BY YOU'), findsOneWidget);
-    expect(find.textContaining('Period due'), findsOneWidget);
-
-    await tester.tap(find.text('Calendar'));
-    await tester.pumpAndSettle();
-    if (dueDate.month != today.month || dueDate.year != today.year) {
-      await tester.tap(find.byTooltip('Next month'));
-      await tester.pumpAndSettle();
-    }
-
-    expect(find.text('Due date'), findsOneWidget);
-    expect(
-      find.textContaining('You set your next period due date'),
-      findsOneWidget,
-    );
-  });
-
-  testWidgets('Profile exposes the next period due-date editor', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(412, 915));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final controller = AppController.inMemory();
-    await controller.completeOnboarding(
-      UserProfile(
-        name: 'Nadia Rahman',
-        dateOfBirth: DateTime(1997, 4, 16),
-        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
-        cycleLength: 28,
-        periodLength: 5,
-      ),
-    );
-    await tester.pumpWidget(CycleCompassApp(controller: controller));
-    await tester.tap(find.text('Profile'));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('Next period due date'),
-      300,
-      scrollable: find.byType(Scrollable).last,
-    );
-
-    await tester.tap(find.text('Next period due date'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Set expected date'), findsOneWidget);
   });
 
   testWidgets('calendar day editor records protection and updates its legend', (
@@ -797,6 +725,119 @@ void main() {
     expect(find.text('Off'), findsOneWidget);
   });
 
+  test('the theme preference is stored and announced', () async {
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime(2026, 8, 1),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    expect(controller.themeMode, ThemeMode.system);
+
+    await controller.setThemeMode(ThemeMode.dark);
+
+    expect(controller.themeMode, ThemeMode.dark);
+    expect(controller.profile!.themeMode, ThemeMode.dark);
+    expect(
+      UserProfile.fromMap(controller.profile!.toMap()).themeMode,
+      ThemeMode.dark,
+    );
+    expect(notifications, 1);
+  });
+
+  testWidgets('the appearance setting switches the app to the dark theme', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime.now().subtract(const Duration(days: 8)),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('APPEARANCE'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+
+    expect(find.text('System'), findsOneWidget);
+    expect(find.text('Light'), findsOneWidget);
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.system,
+    );
+
+    await tester.ensureVisible(find.text('Dark'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+
+    expect(controller.profile!.themeMode, ThemeMode.dark);
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.dark,
+    );
+  });
+
+  testWidgets('the calendar month title opens a month and year picker', (
+    tester,
+  ) async {
+    appNow = () => DateTime(2026, 8, 19, 10);
+    addTearDown(() => appNow = DateTime.now);
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime(2026, 8, 11),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('August 2026'), findsOneWidget);
+
+    await tester.tap(find.text('August 2026'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Jump to a month'), findsOneWidget);
+    expect(find.byType(CupertinoPicker), findsNWidgets(2));
+
+    // Five items down the month wheel: August back to March.
+    await _rollWheel(tester, find.byType(CupertinoPicker).first, 200);
+    await tester.tap(find.text('Go to month'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('March 2026'), findsOneWidget);
+    expect(find.text('August 2026'), findsNothing);
+
+    await tester.tap(find.byTooltip('Back to this month'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('August 2026'), findsOneWidget);
+  });
+
   testWidgets('profile sections are expanded by default and collapsible', (
     tester,
   ) async {
@@ -831,6 +872,8 @@ void main() {
       350,
       scrollable: find.byType(Scrollable).last,
     );
+    await tester.ensureVisible(find.text('PREGNANCY & POSTPARTUM'));
+    await tester.pumpAndSettle();
     expect(find.text('Current mode'), findsOneWidget);
 
     await tester.tap(find.text('PREGNANCY & POSTPARTUM'));
@@ -842,10 +885,30 @@ void main() {
       400,
       scrollable: find.byType(Scrollable).last,
     );
+    await tester.ensureVisible(find.text('Private by design'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('stored only on this device'), findsOneWidget);
 
     await tester.tap(find.text('Private by design'));
     await tester.pumpAndSettle();
     expect(find.textContaining('stored only on this device'), findsNothing);
   });
+}
+
+/// Drags a scroll wheel by [pixels] and lets it come to rest.
+///
+/// The pause before lifting keeps the fling velocity at zero, so the wheel
+/// settles on exactly the item the drag distance selects.
+Future<void> _rollWheel(
+  WidgetTester tester,
+  Finder wheel,
+  double pixels,
+) async {
+  final gesture = await tester.startGesture(tester.getCenter(wheel));
+  await gesture.moveBy(Offset(0, pixels));
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.moveBy(Offset.zero);
+  await tester.pump(const Duration(milliseconds: 400));
+  await gesture.up();
+  await tester.pumpAndSettle();
 }

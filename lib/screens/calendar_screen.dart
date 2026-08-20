@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -135,11 +136,35 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           icon: const Icon(Icons.chevron_left_rounded),
                         ),
                         Expanded(
-                          child: Text(
-                            DateFormat.yMMMM().format(_visibleMonth),
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w800),
+                          child: InkWell(
+                            onTap: () => _openMonthPicker(context),
+                            borderRadius: BorderRadius.circular(14),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      DateFormat.yMMMM().format(_visibleMonth),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.arrow_drop_down_rounded,
+                                    size: 22,
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                         if (!DateUtils.isSameMonth(_visibleMonth, today))
@@ -217,8 +242,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
               insights: monthInsights,
               periodEntries: widget.controller.periodEntries,
               usualPeriodLength: profile.periodLength,
-              nextPeriodDueDate: profile.nextPeriodDueDate,
-              today: today,
             ),
           ],
         ),
@@ -230,6 +253,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
     setState(() {
       _visibleMonth = DateTime(_visibleMonth.year, _visibleMonth.month + delta);
     });
+  }
+
+  Future<void> _openMonthPicker(BuildContext context) async {
+    final picked = await showModalBottomSheet<DateTime>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) =>
+          _MonthPickerSheet(visibleMonth: _visibleMonth, today: appNow()),
+    );
+    if (picked != null) setState(() => _visibleMonth = picked);
   }
 
   _CalendarDayState _calendarDayState(
@@ -263,7 +296,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     periodStart: widget.controller.periodStarts.any(
       (logged) => DateUtils.isSameDay(logged, date),
     ),
-    periodDue: DateUtils.isSameDay(date, profile.nextPeriodDueDate),
     pregnancyDue:
         profile.isPregnant && DateUtils.isSameDay(date, profile.dueDate),
   );
@@ -283,7 +315,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
       cycleLength: profile.cycleLength,
       periodLength: profile.periodLength,
       periodStarts: widget.controller.periodStarts,
-      nextPeriodDueDate: profile.nextPeriodDueDate,
     );
     final cycleEntry = _entryStartingOn(snapshot.currentCycleStart);
     if (snapshot.phase == CyclePhase.menstruation &&
@@ -337,7 +368,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
       for (final stageType in LifeStageType.values)
         if (monthDays.any((day) => day.lifeStageType == stageType))
           _LifeStageLegend(lifeStageType: stageType),
-      if (monthDays.any((day) => day.isDueDate)) const _DueDateLegend(),
       if (monthDays.any((day) => day.isPregnancyDueDate))
         const _PregnancyDueDateLegend(),
     ];
@@ -577,7 +607,6 @@ typedef _CalendarDayEvents = ({
 typedef _CalendarDayMarkers = ({
   bool today,
   bool periodStart,
-  bool periodDue,
   bool pregnancyDue,
 });
 
@@ -600,7 +629,6 @@ class _CalendarDayState {
   LifeStageType? get lifeStageType => events.lifeStage;
   bool get isToday => markers.today;
   bool get isLoggedStart => markers.periodStart;
-  bool get isDueDate => markers.periodDue;
   bool get isPregnancyDueDate => markers.pregnancyDue;
   bool get hasPeriodEntry => recordedPeriodEntry != null || isLoggedStart;
 }
@@ -682,6 +710,131 @@ class _CalendarDayEditorSheet extends StatelessWidget {
   );
 }
 
+/// Two wheels — months and years — that jump the calendar to any month.
+///
+/// The year range covers the last ten years and the next two, which is enough
+/// for past history without suggesting the app can predict far ahead.
+class _MonthPickerSheet extends StatefulWidget {
+  const _MonthPickerSheet({required this.visibleMonth, required this.today});
+
+  final DateTime visibleMonth;
+  final DateTime today;
+
+  @override
+  State<_MonthPickerSheet> createState() => _MonthPickerSheetState();
+}
+
+class _MonthPickerSheetState extends State<_MonthPickerSheet> {
+  late final List<int> _years;
+  late final FixedExtentScrollController _monthController;
+  late final FixedExtentScrollController _yearController;
+  late int _month;
+  late int _year;
+
+  @override
+  void initState() {
+    super.initState();
+    final firstYear = widget.today.year - 10;
+    _years = List.generate(13, (index) => firstYear + index);
+    _month = widget.visibleMonth.month;
+    _year = widget.visibleMonth.year.clamp(_years.first, _years.last);
+    _monthController = FixedExtentScrollController(initialItem: _month - 1);
+    _yearController = FixedExtentScrollController(
+      initialItem: _years.indexOf(_year),
+    );
+  }
+
+  @override
+  void dispose() {
+    _monthController.dispose();
+    _yearController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Jump to a month',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 196,
+            child: Row(
+              children: [
+                _wheel(
+                  controller: _monthController,
+                  labels: [
+                    for (var month = 1; month <= 12; month++)
+                      DateFormat.MMMM().format(DateTime(_year, month)),
+                  ],
+                  onSelected: (index) => setState(() => _month = index + 1),
+                ),
+                const SizedBox(width: 12),
+                _wheel(
+                  controller: _yearController,
+                  labels: [for (final year in _years) '$year'],
+                  onSelected: (index) => setState(() => _year = _years[index]),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => Navigator.pop(context, DateTime(_year, _month)),
+              child: const Text('Go to month'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _wheel({
+    required FixedExtentScrollController controller,
+    required List<String> labels,
+    required ValueChanged<int> onSelected,
+  }) => Expanded(
+    child: CupertinoPicker(
+      scrollController: controller,
+      itemExtent: 40,
+      magnification: 1.1,
+      useMagnifier: true,
+      squeeze: 1.1,
+      selectionOverlay: CupertinoPickerDefaultSelectionOverlay(
+        background: Theme.of(
+          context,
+        ).colorScheme.primaryContainer.withValues(alpha: .45),
+      ),
+      onSelectedItemChanged: onSelected,
+      children: [
+        for (final label in labels)
+          Center(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 class _MonthSummaryCard extends StatelessWidget {
   const _MonthSummaryCard({
     required this.month,
@@ -693,8 +846,6 @@ class _MonthSummaryCard extends StatelessWidget {
     required this.insights,
     required this.periodEntries,
     required this.usualPeriodLength,
-    required this.nextPeriodDueDate,
-    required this.today,
   });
 
   final DateTime month;
@@ -706,8 +857,6 @@ class _MonthSummaryCard extends StatelessWidget {
   final List<CycleIntervalInsight> insights;
   final List<PeriodEntry> periodEntries;
   final int usualPeriodLength;
-  final DateTime? nextPeriodDueDate;
-  final DateTime today;
 
   @override
   Widget build(BuildContext context) {
@@ -792,23 +941,9 @@ class _MonthSummaryCard extends StatelessWidget {
                 entry.startDate.month == month.month,
           )
           .map(_durationMessageFor),
-      if (nextPeriodDueDate?.year == month.year &&
-          nextPeriodDueDate?.month == month.month)
-        _dueDateMessage(nextPeriodDueDate!),
       estimateNote,
     ];
     return messages.join('\n\n');
-  }
-
-  String _dueDateMessage(DateTime dueDate) {
-    final date = DateFormat.yMMMMd().format(dueDate);
-    final due = DateTime(dueDate.year, dueDate.month, dueDate.day);
-    final current = DateTime(today.year, today.month, today.day);
-    if (due.isBefore(current)) {
-      final days = current.difference(due).inDays;
-      return 'You expected your period on $date. That was $days ${days == 1 ? 'day' : 'days'} ago; log the actual start or update this date.';
-    }
-    return 'You set your next period due date to $date. This guides the estimate but does not guarantee when bleeding will start.';
   }
 
   String _messageFor(CycleIntervalInsight insight) {
@@ -910,8 +1045,6 @@ class _DayCell extends StatelessWidget {
               _ovulationFlowerMarker(),
             _dayNumber(context),
             if (dayState.isLoggedStart) _periodStartMarker(context),
-            if (dayState.isDueDate && !dayState.isLoggedStart)
-              _periodDueMarker(context),
             if (dayState.isPregnancyDueDate) _pregnancyDueMarker(),
             if (dayState.intercourseEntry != null) _intercourseMarker(),
           ],
@@ -948,33 +1081,9 @@ class _DayCell extends StatelessWidget {
     ),
   );
 
-  Widget _periodDueMarker(BuildContext context) => Positioned(
-    top: 5,
-    right: 5,
-    child: Container(
-      width: 7,
-      height: 7,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary,
-          width: 2,
-        ),
-      ),
-    ),
-  );
-
-  Widget _pregnancyDueMarker() => Positioned(
-    bottom: 4,
-    child: Container(
-      width: 6,
-      height: 6,
-      decoration: const BoxDecoration(
-        color: _postpartumColor,
-        shape: BoxShape.circle,
-      ),
-    ),
+  Widget _pregnancyDueMarker() => const Positioned(
+    bottom: 3,
+    child: Icon(Icons.child_care, size: 13, color: _postpartumColor),
   );
 
   Widget _intercourseMarker() {
@@ -1043,31 +1152,6 @@ class _LegendItem extends StatelessWidget {
         ),
       const SizedBox(width: 6),
       Text(phase.label, style: Theme.of(context).textTheme.bodySmall),
-    ],
-  );
-}
-
-class _DueDateLegend extends StatelessWidget {
-  const _DueDateLegend();
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: Theme.of(context).colorScheme.primary,
-            width: 2,
-          ),
-        ),
-      ),
-      const SizedBox(width: 6),
-      Text('Due date', style: Theme.of(context).textTheme.bodySmall),
     ],
   );
 }
@@ -1149,15 +1233,7 @@ class _PregnancyDueDateLegend extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(color: _postpartumColor, width: 2),
-        ),
-      ),
+      const Icon(Icons.child_care, size: 14, color: _postpartumColor),
       const SizedBox(width: 6),
       Text('Expected due date', style: Theme.of(context).textTheme.bodySmall),
     ],

@@ -52,7 +52,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: const Icon(
-                      Icons.blur_circular_rounded,
+                      Icons.water_drop_rounded,
                       color: Colors.white,
                     ),
                   ),

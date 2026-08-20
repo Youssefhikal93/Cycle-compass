@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A dark berry-tinted surface, with a lighter drop so it stays readable. -->
+    <color name="splash_background">#1F1416</color>
+    <color name="splash_logo">#D9718F</color>
+</resources>

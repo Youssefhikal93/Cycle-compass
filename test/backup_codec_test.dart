@@ -24,6 +24,7 @@ void main() {
         'postpartum_started_on': null,
         'postpartum_ended_on': null,
         'notifications_enabled': 1,
+        'theme_mode': 'system',
       },
       periodEntries: [
         {
@@ -73,6 +74,47 @@ void main() {
       expect(restored.data.periodEntries, payload.data.periodEntries);
       expect(restored.data.dailyLogs, payload.data.dailyLogs);
       expect(restored.data.lifeStageEntries, payload.data.lifeStageEntries);
+    });
+
+    test('an older backup with a manual due date still opens', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      final data = fields['data']! as Map<String, Object?>;
+      data['profile'] = {
+        ...data['profile']! as Map<String, Object?>,
+        'next_period_due_date': '2026-08-29',
+      }..remove('theme_mode');
+
+      final restored = await codec.open(codec.readEnvelope(jsonEncode(fields)));
+
+      expect(restored.data.profile!['next_period_due_date'], '2026-08-29');
+      expect(restored.data.profile!['theme_mode'], 'system');
+    });
+
+    test('a stored theme preference round-trips', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      final data = fields['data']! as Map<String, Object?>;
+      data['profile'] = {
+        ...data['profile']! as Map<String, Object?>,
+        'theme_mode': 'dark',
+      };
+
+      final restored = await codec.open(codec.readEnvelope(jsonEncode(fields)));
+
+      expect(restored.data.profile!['theme_mode'], 'dark');
+    });
+
+    test('an unknown theme preference is rejected', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      final data = fields['data']! as Map<String, Object?>;
+      data['profile'] = {
+        ...data['profile']! as Map<String, Object?>,
+        'theme_mode': 'neon',
+      };
+
+      await expectLater(
+        codec.open(codec.readEnvelope(jsonEncode(fields))),
+        throwsA(isA<BackupFormatException>()),
+      );
     });
 
     test('writes the documented envelope header', () {

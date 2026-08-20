@@ -34,6 +34,17 @@ class ProfileScreen extends StatelessWidget {
       periodStarts: controller.periodStarts,
       configuredLength: profile.cycleLength,
     );
+    final nextPeriodEstimate = profile.isPregnant
+        ? null
+        : const CycleCalculator()
+              .calculate(
+                onDate: appNow(),
+                lastPeriodStart: profile.lastPeriodStart,
+                cycleLength: profile.cycleLength,
+                periodLength: profile.periodLength,
+                periodStarts: controller.periodStarts,
+              )
+              .nextPeriod;
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
@@ -108,17 +119,13 @@ class ProfileScreen extends StatelessWidget {
               ),
               _SettingTile(
                 icon: Icons.event_available_outlined,
-                label: 'Next period due date',
-                value: profile.isPregnant
+                label: 'Next period (estimated)',
+                value: nextPeriodEstimate == null
                     ? isPostpartum
                           ? 'Paused until the first postpartum period'
                           : 'Paused during pregnancy'
-                    : profile.nextPeriodDueDate == null
-                    ? 'Automatic estimate · tap to set a date'
-                    : '${DateFormat.yMMMMd().format(profile.nextPeriodDueDate!)} · set by you',
-                onTap: profile.isPregnant
-                    ? null
-                    : () => _editNextPeriodDueDate(context, profile),
+                    : '${DateFormat.yMMMMd().format(nextPeriodEstimate)} · updates itself when you log a period',
+                onTap: null,
               ),
               _SettingTile(
                 icon: Icons.event_outlined,
@@ -258,6 +265,16 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _SettingsGroup(
+            title: 'Appearance',
+            children: [
+              _ThemeModeTile(
+                themeMode: profile.themeMode,
+                onChanged: controller.setThemeMode,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
             title: 'Backup & restore',
             children: [
               _SettingTile(
@@ -342,73 +359,6 @@ class ProfileScreen extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  Future<void> _editNextPeriodDueDate(
-    BuildContext context,
-    UserProfile profile,
-  ) async {
-    final action = await showModalBottomSheet<_DueDateAction>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              title: const Text('Next period due date'),
-              subtitle: Text(
-                profile.nextPeriodDueDate == null
-                    ? 'Add the date you currently expect your period to start.'
-                    : 'Currently ${DateFormat.yMMMMd().format(profile.nextPeriodDueDate!)}',
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit_calendar_outlined),
-              title: Text(
-                profile.nextPeriodDueDate == null
-                    ? 'Set expected date'
-                    : 'Change expected date',
-              ),
-              onTap: () => Navigator.pop(sheetContext, _DueDateAction.edit),
-            ),
-            if (profile.nextPeriodDueDate != null)
-              ListTile(
-                leading: const Icon(Icons.auto_awesome_outlined),
-                title: const Text('Use automatic estimate'),
-                subtitle: const Text('Remove the date you entered'),
-                onTap: () => Navigator.pop(sheetContext, _DueDateAction.clear),
-              ),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted || action == null) return;
-    if (action == _DueDateAction.clear) {
-      await controller.setNextPeriodDueDate(null);
-      return;
-    }
-    final today = appNow();
-    final firstDate = profile.lastPeriodStart.add(const Duration(days: 1));
-    final automatic = const CycleCalculator()
-        .calculate(
-          onDate: today,
-          lastPeriodStart: profile.lastPeriodStart,
-          cycleLength: profile.cycleLength,
-          periodLength: profile.periodLength,
-          periodStarts: controller.periodStarts,
-        )
-        .nextPeriod;
-    final initial = profile.nextPeriodDueDate ?? automatic;
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial.isBefore(firstDate) ? firstDate : initial,
-      firstDate: firstDate,
-      lastDate: today.add(const Duration(days: 365)),
-      helpText: 'Expected next period start',
-    );
-    if (picked != null) await controller.setNextPeriodDueDate(picked);
   }
 
   String _periodEntryLabel(PeriodEntry entry) {
@@ -1136,8 +1086,6 @@ class _PassphraseDialogState extends State<_PassphraseDialog> {
 
 enum _PeriodAction { edit, editEnd, addDay, removeDay, clearEnd, delete }
 
-enum _DueDateAction { edit, clear }
-
 class _PregnancyUpdate {
   const _PregnancyUpdate({required this.enabled, this.dueDate});
 
@@ -1545,6 +1493,59 @@ class _SettingsGroup extends StatelessWidget {
       children: [
         Divider(height: 1, color: Theme.of(context).colorScheme.outlineVariant),
         ...children,
+      ],
+    ),
+  );
+}
+
+class _ThemeModeTile extends StatelessWidget {
+  const _ThemeModeTile({required this.themeMode, required this.onChanged});
+
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Theme',
+          style: Theme.of(
+            context,
+          ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'System follows your Android setting.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        SegmentedButton<ThemeMode>(
+          segments: const [
+            ButtonSegment(
+              value: ThemeMode.system,
+              label: Text('System'),
+              icon: Icon(Icons.brightness_auto_outlined),
+            ),
+            ButtonSegment(
+              value: ThemeMode.light,
+              label: Text('Light'),
+              icon: Icon(Icons.light_mode_outlined),
+            ),
+            ButtonSegment(
+              value: ThemeMode.dark,
+              label: Text('Dark'),
+              icon: Icon(Icons.dark_mode_outlined),
+            ),
+          ],
+          showSelectedIcon: false,
+          selected: {themeMode},
+          onSelectionChanged: (selection) => onChanged(selection.first),
+        ),
       ],
     ),
   );

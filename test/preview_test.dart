@@ -12,7 +12,10 @@ import 'package:path/path.dart' as p;
 void main() {
   const phoneSize = Size(412, 915);
 
-  setUpAll(_loadRobotoForPreviews);
+  setUpAll(() async {
+    await initializeAppLocale();
+    await _loadRobotoForPreviews();
+  });
 
   // Golden screenshots depend on "today", so pin the clock to keep the
   // rendered output identical no matter when the suite runs.
@@ -51,9 +54,6 @@ void main() {
         cycleLength: 28,
         periodLength: 5,
       ),
-    );
-    await controller.setNextPeriodDueDate(
-      appNow().add(const Duration(days: 20)),
     );
     const previewKey = ValueKey('home-preview');
 
@@ -192,7 +192,6 @@ void main() {
       latest,
       latest.add(const Duration(days: 5)),
     );
-    await controller.setNextPeriodDueDate(latest.add(const Duration(days: 20)));
     const previewKey = ValueKey('calendar-preview');
 
     await tester.pumpWidget(

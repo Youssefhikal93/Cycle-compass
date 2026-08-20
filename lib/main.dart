@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 
 import 'app_controller.dart';
 import 'data/app_database.dart';
@@ -6,8 +9,21 @@ import 'screens/home_shell.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/cycle_notification_service.dart';
 
+/// The app is day-first everywhere: dates read and type as DD/MM/YYYY.
+const appLocale = Locale('en', 'GB');
+const appLocaleName = 'en_GB';
+
+/// Loads the day-first date symbols and makes them the default for [DateFormat].
+///
+/// Called from [main] and from tests that assert formatted dates.
+Future<void> initializeAppLocale() async {
+  Intl.defaultLocale = appLocaleName;
+  await initializeDateFormatting(appLocaleName);
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeAppLocale();
   final database = await AppDatabase.open();
   final notificationService = CycleNotificationService();
   await notificationService.initialize();
@@ -26,15 +42,24 @@ class CycleCompassApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Cycle Compass',
-      debugShowCheckedModeBanner: false,
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      themeMode: ThemeMode.system,
-      home: AnimatedBuilder(
-        animation: controller,
-        builder: (context, _) => AnimatedSwitcher(
+    // The builder wraps MaterialApp so a saved theme preference takes effect
+    // as soon as it changes, not only inside the screens.
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => MaterialApp(
+        title: 'Cycle Compass',
+        debugShowCheckedModeBanner: false,
+        theme: _theme(Brightness.light),
+        darkTheme: _theme(Brightness.dark),
+        themeMode: controller.themeMode,
+        locale: appLocale,
+        supportedLocales: const [appLocale],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: AnimatedSwitcher(
           duration: const Duration(milliseconds: 350),
           child: controller.isOnboarded
               ? HomeShell(key: const ValueKey('home'), controller: controller)

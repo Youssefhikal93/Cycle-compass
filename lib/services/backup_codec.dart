@@ -20,6 +20,7 @@ const _nonceLength = 12;
 const _maxKdfIterations = 2000000;
 const _protectionValues = {'protected', 'unprotected'};
 const _lifeStageValues = {'pregnancy', 'postpartum'};
+const _themeModeValues = {'system', 'light', 'dark'};
 
 const _notABackup = 'This file is not a Cycle Compass backup.';
 const _damaged =
@@ -313,10 +314,14 @@ Map<String, Object?> _readProfileRow(Object? value) {
     'is_pregnant': _flag(row, 'is_pregnant'),
     'pregnancy_started_on': _optionalDate(row, 'pregnancy_started_on'),
     'due_date': _optionalDate(row, 'due_date'),
+    // Kept so backups written before the manual due date was removed still
+    // restore. The column is no longer read by the app.
     'next_period_due_date': _optionalDate(row, 'next_period_due_date'),
     'postpartum_started_on': _optionalDate(row, 'postpartum_started_on'),
     'postpartum_ended_on': _optionalDate(row, 'postpartum_ended_on'),
     'notifications_enabled': _flag(row, 'notifications_enabled', fallback: 1),
+    'theme_mode':
+        _optionalChoice(row, 'theme_mode', _themeModeValues) ?? 'system',
   };
 }
 

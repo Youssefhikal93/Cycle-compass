@@ -1,4 +1,22 @@
+import 'package:flutter/material.dart' show ThemeMode;
+
 import '../services/clock.dart';
+
+extension ThemeModeCopy on ThemeMode {
+  String get storageValue => switch (this) {
+    ThemeMode.system => 'system',
+    ThemeMode.light => 'light',
+    ThemeMode.dark => 'dark',
+  };
+}
+
+/// Falls back to following the system for unknown or missing values, so a
+/// profile written before this setting existed still loads.
+ThemeMode themeModeFromStorage(Object? storageValue) => switch (storageValue) {
+  'light' => ThemeMode.light,
+  'dark' => ThemeMode.dark,
+  _ => ThemeMode.system,
+};
 
 class UserProfile {
   const UserProfile({
@@ -11,10 +29,10 @@ class UserProfile {
     this.isPregnant = false,
     this.pregnancyStartedOn,
     this.dueDate,
-    this.nextPeriodDueDate,
     this.postpartumStartedOn,
     this.postpartumEndedOn,
     this.notificationsEnabled = true,
+    this.themeMode = ThemeMode.system,
   });
 
   final String name;
@@ -26,10 +44,10 @@ class UserProfile {
   final bool isPregnant;
   final DateTime? pregnancyStartedOn;
   final DateTime? dueDate;
-  final DateTime? nextPeriodDueDate;
   final DateTime? postpartumStartedOn;
   final DateTime? postpartumEndedOn;
   final bool notificationsEnabled;
+  final ThemeMode themeMode;
 
   bool isPostpartumOn(DateTime date) {
     final expectedDueDate = dueDate;
@@ -75,10 +93,10 @@ class UserProfile {
     bool? isPregnant,
     Object? pregnancyStartedOn = _unchanged,
     Object? dueDate = _unchanged,
-    Object? nextPeriodDueDate = _unchanged,
     Object? postpartumStartedOn = _unchanged,
     Object? postpartumEndedOn = _unchanged,
     bool? notificationsEnabled,
+    ThemeMode? themeMode,
   }) => UserProfile(
     name: name ?? this.name,
     dateOfBirth: dateOfBirth ?? this.dateOfBirth,
@@ -95,9 +113,6 @@ class UserProfile {
     dueDate: identical(dueDate, _unchanged)
         ? this.dueDate
         : dueDate as DateTime?,
-    nextPeriodDueDate: identical(nextPeriodDueDate, _unchanged)
-        ? this.nextPeriodDueDate
-        : nextPeriodDueDate as DateTime?,
     postpartumStartedOn: identical(postpartumStartedOn, _unchanged)
         ? this.postpartumStartedOn
         : postpartumStartedOn as DateTime?,
@@ -105,6 +120,7 @@ class UserProfile {
         ? this.postpartumEndedOn
         : postpartumEndedOn as DateTime?,
     notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+    themeMode: themeMode ?? this.themeMode,
   );
 
   String get initials {
@@ -131,9 +147,6 @@ class UserProfile {
         ? null
         : _dateOnly(pregnancyStartedOn!),
     'due_date': dueDate == null ? null : _dateOnly(dueDate!),
-    'next_period_due_date': nextPeriodDueDate == null
-        ? null
-        : _dateOnly(nextPeriodDueDate!),
     'postpartum_started_on': postpartumStartedOn == null
         ? null
         : _dateOnly(postpartumStartedOn!),
@@ -141,6 +154,7 @@ class UserProfile {
         ? null
         : _dateOnly(postpartumEndedOn!),
     'notifications_enabled': notificationsEnabled ? 1 : 0,
+    'theme_mode': themeMode.storageValue,
   };
 
   factory UserProfile.fromMap(Map<String, Object?> map) => UserProfile(
@@ -153,10 +167,10 @@ class UserProfile {
     isPregnant: (map['is_pregnant'] as int? ?? 0) == 1,
     pregnancyStartedOn: _optionalDate(map['pregnancy_started_on']),
     dueDate: _optionalDate(map['due_date']),
-    nextPeriodDueDate: _optionalDate(map['next_period_due_date']),
     postpartumStartedOn: _optionalDate(map['postpartum_started_on']),
     postpartumEndedOn: _optionalDate(map['postpartum_ended_on']),
     notificationsEnabled: (map['notifications_enabled'] as int? ?? 1) == 1,
+    themeMode: themeModeFromStorage(map['theme_mode']),
   );
 }
 

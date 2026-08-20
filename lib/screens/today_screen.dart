@@ -44,7 +44,6 @@ class _TodayScreenState extends State<TodayScreen> {
       cycleLength: profile.cycleLength,
       periodLength: profile.periodLength,
       periodStarts: controller.periodStarts,
-      nextPeriodDueDate: profile.nextPeriodDueDate,
     );
     final snapshot = calculatedSnapshot.copyWith(
       phase: _phaseFromRecordedRange(
@@ -176,11 +175,7 @@ class _TodayScreenState extends State<TodayScreen> {
                             const SizedBox(width: 9),
                             Expanded(
                               child: Text(
-                                _nextPeriodText(
-                                  now: now,
-                                  snapshot: snapshot,
-                                  manualDueDate: profile.nextPeriodDueDate,
-                                ),
+                                _nextPeriodText(snapshot),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -568,7 +563,6 @@ class _ConfidenceBadge extends StatelessWidget {
           switch (basis) {
             CycleEstimateBasis.configuredLength => 'SETTINGS-BASED',
             CycleEstimateBasis.recentHistory => 'BASED ON HISTORY',
-            CycleEstimateBasis.manualDueDate => 'DATE SET BY YOU',
             CycleEstimateBasis.recordedCycle => 'RECORDED CYCLE',
           },
           style: TextStyle(
@@ -583,30 +577,8 @@ class _ConfidenceBadge extends StatelessWidget {
   );
 }
 
-String _nextPeriodText({
-  required DateTime now,
-  required CycleSnapshot snapshot,
-  required DateTime? manualDueDate,
-}) {
-  if (manualDueDate == null) {
-    return 'Next period estimated in ${snapshot.daysUntilNextPeriod} days';
-  }
-  final today = DateTime(now.year, now.month, now.day);
-  final due = DateTime(
-    manualDueDate.year,
-    manualDueDate.month,
-    manualDueDate.day,
-  );
-  final difference = due.difference(today).inDays;
-  if (difference < 0) {
-    final overdue = difference.abs();
-    return 'Due date was $overdue ${overdue == 1 ? 'day' : 'days'} ago · update or log a period';
-  }
-  final timing = difference == 0
-      ? 'today'
-      : 'in $difference ${difference == 1 ? 'day' : 'days'}';
-  return 'Period due ${DateFormat.MMMd().format(due)} · $timing';
-}
+String _nextPeriodText(CycleSnapshot snapshot) =>
+    'Next period estimated in ${snapshot.daysUntilNextPeriod} days';
 
 class _PhaseTile extends StatelessWidget {
   const _PhaseTile({

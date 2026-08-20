@@ -123,20 +123,5 @@ void main() {
       expect(insights.single.timing, CycleTiming.early);
       expect(insights.single.outsideCommonAdultRange, isTrue);
     });
-
-    test('a manual due date overrides the automatic next-period estimate', () {
-      final result = calculator.calculate(
-        onDate: DateTime(2026, 7, 20),
-        lastPeriodStart: DateTime(2026, 7, 16),
-        cycleLength: 28,
-        periodLength: 5,
-        periodStarts: [DateTime(2026, 7, 16)],
-        nextPeriodDueDate: DateTime(2026, 8, 5),
-      );
-
-      expect(result.nextPeriod, DateTime(2026, 8, 5));
-      expect(result.cycleLength, 20);
-      expect(result.estimateBasis, CycleEstimateBasis.manualDueDate);
-    });
   });
 }

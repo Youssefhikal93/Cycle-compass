@@ -33,7 +33,11 @@ calendar predictions are clearly presented as estimates.
   Android share sheet, encrypted with a passphrase by default (AES-256-GCM,
   PBKDF2), validated fully before any restore touches existing data
 - Delete-all-data privacy control
-- Light and dark themes following the system setting
+- Theme choice in settings: system, light, or dark
+- Day-first European dates everywhere, including DD/MM/YYYY manual entry
+- Calendar month/year scroll wheels, swipe navigation, and a baby icon on the
+  expected pregnancy due date
+- Branded blood-drop splash screen and launcher icon in the app palette
 - Responsive Material 3 interface with rendered phone-size preview tests
 
 ## Preview
@@ -79,6 +83,6 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Full unit, widget, and golden-preview suite: 70 tests passing
+- Full unit, widget, and golden-preview suite: 73 tests passing
 - Golden previews render with a pinned clock, so they are stable over time
 - Android debug APK: built successfully

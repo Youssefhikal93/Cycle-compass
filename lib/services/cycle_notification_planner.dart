@@ -78,7 +78,6 @@ class CycleNotificationPlanner {
             cycleLength: request.profile.cycleLength,
             periodLength: request.profile.periodLength,
             periodStarts: request.periodStarts,
-            nextPeriodDueDate: request.profile.nextPeriodDueDate,
           )
           .phase;
 
