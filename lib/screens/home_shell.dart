@@ -6,6 +6,13 @@ import 'learn_screen.dart';
 import 'profile_screen.dart';
 import 'today_screen.dart';
 
+/// Whether the Learn tab is part of the bottom navigation.
+///
+/// The educational content is hidden from the shell for now while it is being
+/// revised. `learn_screen.dart` stays in the codebase, and the Today screen
+/// keeps its own inline phase explanations, so nothing is lost by hiding it.
+const bool showLearnTab = false;
+
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.controller});
 
@@ -28,13 +35,39 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
+    final destinations = <NavigationDestination>[
+      const NavigationDestination(
+        icon: Icon(Icons.today_outlined),
+        selectedIcon: Icon(Icons.today_rounded),
+        label: 'Today',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.calendar_month_outlined),
+        selectedIcon: Icon(Icons.calendar_month_rounded),
+        label: 'Calendar',
+      ),
+      if (showLearnTab)
+        const NavigationDestination(
+          icon: Icon(Icons.menu_book_outlined),
+          selectedIcon: Icon(Icons.menu_book_rounded),
+          label: 'Learn',
+        ),
+      const NavigationDestination(
+        icon: Icon(Icons.person_outline_rounded),
+        selectedIcon: Icon(Icons.person_rounded),
+        label: 'Profile',
+      ),
+    ];
+    // Profile is always the last destination, so its index follows whichever
+    // tabs were built instead of being hard-coded.
+    final profileIndex = destinations.length - 1;
+    final pages = <Widget>[
       TodayScreen(
         controller: widget.controller,
-        onOpenProfile: () => setState(() => _index = 3),
+        onOpenProfile: () => setState(() => _index = profileIndex),
       ),
       CalendarScreen(controller: widget.controller),
-      const LearnScreen(),
+      if (showLearnTab) const LearnScreen(),
       ProfileScreen(controller: widget.controller),
     ];
     return Scaffold(
@@ -42,28 +75,7 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.today_outlined),
-            selectedIcon: Icon(Icons.today_rounded),
-            label: 'Today',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month_rounded),
-            label: 'Calendar',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.menu_book_outlined),
-            selectedIcon: Icon(Icons.menu_book_rounded),
-            label: 'Learn',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: 'Profile',
-          ),
-        ],
+        destinations: destinations,
       ),
     );
   }

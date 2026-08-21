@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cycle_compass/app_controller.dart';
 import 'package:cycle_compass/main.dart';
+import 'package:cycle_compass/models/ovulation_test_entry.dart';
 import 'package:cycle_compass/models/user_profile.dart';
 import 'package:cycle_compass/services/clock.dart';
 import 'package:flutter/material.dart';
@@ -169,6 +170,78 @@ void main() {
     await expectLater(
       find.byKey(previewKey),
       matchesGoldenFile('goldens/profile.png'),
+    );
+  });
+
+  testWidgets('renders estimated periods for missed logs', (tester) async {
+    await tester.binding.setSurfaceSize(phoneSize);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime(2026, 1, 4),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    const previewKey = ValueKey('calendar-estimated-preview');
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: previewKey,
+        child: CycleCompassApp(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byKey(previewKey),
+      matchesGoldenFile('goldens/calendar-estimated.png'),
+    );
+  });
+
+  testWidgets('renders estimated periods in the dark theme', (tester) async {
+    await tester.binding.setSurfaceSize(phoneSize);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime(2026, 1, 4),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await controller.setThemeMode(ThemeMode.dark);
+    await controller.startBreastfeeding(DateTime(2026, 3, 2));
+    await controller.saveOvulationTest(
+      DateTime(2026, 3, 12),
+      OvulationTestResult.positive,
+    );
+    await controller.saveOvulationTest(
+      DateTime(2026, 3, 13),
+      OvulationTestResult.negative,
+    );
+    const previewKey = ValueKey('calendar-dark-preview');
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: previewKey,
+        child: CycleCompassApp(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Calendar'));
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byKey(previewKey),
+      matchesGoldenFile('goldens/calendar-dark.png'),
     );
   });
 

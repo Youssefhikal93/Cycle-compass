@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../app_controller.dart';
 import '../models/intercourse_entry.dart';
 import '../models/life_stage_entry.dart';
+import '../models/ovulation_test_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
 import '../services/clock.dart';
@@ -13,9 +14,19 @@ import 'today_screen.dart';
 
 const _pregnancyColor = Color(0xFF8D4D72);
 const _postpartumColor = Color(0xFF8A6652);
+const _breastfeedingColor = Color(0xFF2F7A6A);
 const _protectedSexColor = Color(0xFF26715A);
 const _unprotectedSexColor = Color(0xFFB14962);
 const _ovulationFlowerColor = Color(0xFFD49A19);
+
+/// Fill strength of a recorded period day; every fainter value below is
+/// deliberately weaker so estimated days read as estimates.
+const _recordedPeriodAlpha = .24;
+const _estimatedPeriodAlpha = .12;
+const _recordedPhaseAlpha = .10;
+const _estimatedPhaseAlpha = .05;
+const _ovulationFlowerAlpha = .34;
+const _estimatedOvulationFlowerAlpha = .17;
 
 Color _pregnancyBackground(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
@@ -26,6 +37,14 @@ Color _postpartumBackground(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
     ? const Color(0xFF41352C)
     : const Color(0xFFE7DDD7);
+
+Color _positiveTestColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? const Color(0xFFE0AE3A)
+    : const Color(0xFFA9740B);
+
+Color _negativeTestColor(BuildContext context) =>
+    Theme.of(context).colorScheme.onSurfaceVariant;
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key, required this.controller});
@@ -71,11 +90,21 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _visibleMonth.month,
     ).weekday;
     final leading = firstWeekday - 1;
+    final estimatedEntries = widget.controller.estimatedPeriodEntries;
     final monthDays = List.generate(daysInMonth, (index) {
       final date = DateTime(_visibleMonth.year, _visibleMonth.month, index + 1);
-      return _calendarDayState(date, profile, calculator, today);
+      return _calendarDayState(
+        date,
+        profile,
+        calculator,
+        today,
+        estimatedEntries,
+      );
     });
     final legendItems = _legendItems(monthDays);
+    final breastfeedingSince = profile.isBreastfeedingOn(today)
+        ? profile.breastfeedingStartedOn
+        : null;
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
@@ -110,6 +139,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     : 'Add period date',
               ),
             ),
+            if (breastfeedingSince != null) ...[
+              const SizedBox(height: 14),
+              _BreastfeedingChip(since: breastfeedingSince),
+            ],
             const SizedBox(height: 24),
             GestureDetector(
               onHorizontalDragEnd: (details) {
@@ -234,6 +267,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             ],
             _MonthSummaryCard(
               month: _visibleMonth,
+              today: today,
               isPregnant: profile.isPregnant,
               isPostpartum: isPostpartum,
               configuredLength: profile.cycleLength,
@@ -242,6 +276,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
               insights: monthInsights,
               periodEntries: widget.controller.periodEntries,
               usualPeriodLength: profile.periodLength,
+              estimatedStarts: [
+                for (final dayState in monthDays)
+                  if (dayState.isEstimatedStart) dayState.date,
+              ],
+              breastfeedingSince: breastfeedingSince,
+              lastRecordedStart: widget.controller.periodStarts.isEmpty
+                  ? null
+                  : widget.controller.periodStarts.first,
+              positiveTests: _positiveTestNotes(monthDays, profile, calculator),
+              negativeTestCount: monthDays
+                  .where(
+                    (dayState) =>
+                        dayState.ovulationTest?.result ==
+                        OvulationTestResult.negative,
+                  )
+                  .length,
             ),
           ],
         ),
@@ -270,20 +320,41 @@ class _CalendarScreenState extends State<CalendarScreen> {
     UserProfile profile,
     CycleCalculator calculator,
     DateTime today,
+    List<PeriodEntry> estimatedEntries,
   ) {
     final lifeStageType = _lifeStageTypeOn(date, profile, today);
     final recordedEntry = _recordedEntryFor(date);
-    final phase = _phaseOn(date, profile, calculator, lifeStageType);
+    // Pregnancy and recorded life-stage ranges replace cycle coloring, so no
+    // snapshot and no estimated period is calculated for those days.
+    final paused = profile.isPregnant || lifeStageType != null;
+    final snapshot = paused
+        ? null
+        : calculator.calculate(
+            onDate: date,
+            lastPeriodStart: profile.lastPeriodStart,
+            cycleLength: profile.cycleLength,
+            periodLength: profile.periodLength,
+            periodStarts: widget.controller.periodStarts,
+          );
+    final estimatedEntry = paused || recordedEntry != null
+        ? null
+        : _entryContaining(estimatedEntries, date);
     final events = (
       period: recordedEntry,
+      estimatedPeriod: estimatedEntry,
       intercourse: widget.controller.intercourseEntryOn(date),
+      ovulationTest: widget.controller.ovulationTestOn(date),
       lifeStage: lifeStageType,
     );
     return _CalendarDayState(
       date: date,
-      phase: phase,
+      phase: _phaseOn(date, snapshot, recordedEntry),
+      isEstimated:
+          snapshot != null &&
+          recordedEntry == null &&
+          snapshot.estimateBasis != CycleEstimateBasis.recordedCycle,
       events: events,
-      markers: _markersFor(date, profile, today),
+      markers: _markersFor(date, profile, today, estimatedEntry),
     );
   }
 
@@ -291,31 +362,33 @@ class _CalendarScreenState extends State<CalendarScreen> {
     DateTime date,
     UserProfile profile,
     DateTime today,
+    PeriodEntry? estimatedEntry,
   ) => (
     today: DateUtils.isSameDay(date, today),
     periodStart: widget.controller.periodStarts.any(
       (logged) => DateUtils.isSameDay(logged, date),
     ),
+    estimatedStart:
+        estimatedEntry != null &&
+        DateUtils.isSameDay(estimatedEntry.startDate, date),
+    // Once a birth is recorded it replaces the expected due date as the marked
+    // day, so the calendar shows what happened rather than what was expected.
     pregnancyDue:
-        profile.isPregnant && DateUtils.isSameDay(date, profile.dueDate),
+        profile.isPregnant &&
+        profile.babyBornOn == null &&
+        DateUtils.isSameDay(date, profile.dueDate),
+    babyBorn:
+        profile.babyBornOn != null &&
+        DateUtils.isSameDay(date, profile.babyBornOn),
   );
 
   CyclePhase? _phaseOn(
     DateTime date,
-    UserProfile profile,
-    CycleCalculator calculator,
-    LifeStageType? lifeStageType,
+    CycleSnapshot? snapshot,
+    PeriodEntry? recordedEntry,
   ) {
-    if (profile.isPregnant || lifeStageType != null) return null;
-    final recordedEntry = _recordedEntryFor(date);
+    if (snapshot == null) return null;
     if (recordedEntry != null) return CyclePhase.menstruation;
-    final snapshot = calculator.calculate(
-      onDate: date,
-      lastPeriodStart: profile.lastPeriodStart,
-      cycleLength: profile.cycleLength,
-      periodLength: profile.periodLength,
-      periodStarts: widget.controller.periodStarts,
-    );
     final cycleEntry = _entryStartingOn(snapshot.currentCycleStart);
     if (snapshot.phase == CyclePhase.menstruation &&
         cycleEntry?.endDate != null &&
@@ -325,12 +398,42 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return snapshot.phase;
   }
 
+  /// Positive tests in the visible month, each compared with the estimated
+  /// ovulation day of the cycle it falls in.
+  List<_PositiveTestNote> _positiveTestNotes(
+    List<_CalendarDayState> monthDays,
+    UserProfile profile,
+    CycleCalculator calculator,
+  ) => [
+    for (final dayState in monthDays)
+      if (dayState.ovulationTest?.result == OvulationTestResult.positive)
+        (
+          date: dayState.date,
+          offsetDays: dayState.date
+              .difference(
+                calculator
+                    .calculate(
+                      onDate: dayState.date,
+                      lastPeriodStart: profile.lastPeriodStart,
+                      cycleLength: profile.cycleLength,
+                      periodLength: profile.periodLength,
+                      periodStarts: widget.controller.periodStarts,
+                    )
+                    .estimatedOvulation,
+              )
+              .inDays,
+        ),
+  ];
+
   LifeStageType? _lifeStageTypeOn(
     DateTime date,
     UserProfile profile,
     DateTime today,
   ) {
     for (final entry in widget.controller.lifeStageEntries) {
+      // Breastfeeding never colors a day: periods can happen while it is
+      // active, so cycle coloring has to keep running underneath it.
+      if (entry.type == LifeStageType.breastfeeding) continue;
       if (entry.contains(date)) return entry.type;
     }
     if (profile.isPostpartumDate(date, through: today)) {
@@ -344,11 +447,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   bool _isActivePregnancyDate(DateTime date, UserProfile profile) {
     final pregnancyStart = profile.pregnancyStartedOn;
-    final dueDate = profile.dueDate;
-    if (!profile.isPregnant || pregnancyStart == null || dueDate == null) {
+    // Pregnancy coloring stops at the recorded birth date when there is one,
+    // and at the expected due date otherwise.
+    final pregnancyEnd = profile.postpartumAnchor;
+    if (!profile.isPregnant || pregnancyStart == null || pregnancyEnd == null) {
       return false;
     }
-    return !date.isBefore(pregnancyStart) && date.isBefore(dueDate);
+    return !date.isBefore(pregnancyStart) && date.isBefore(pregnancyEnd);
   }
 
   List<Widget> _legendItems(List<_CalendarDayState> monthDays) {
@@ -360,21 +465,33 @@ class _CalendarScreenState extends State<CalendarScreen> {
       for (final phase in CyclePhase.values)
         if (phases.contains(phase)) _LegendItem(phase: phase),
       if (monthDays.any((day) => day.isLoggedStart)) const _PeriodStartLegend(),
+      if (monthDays.any((day) => day.isEstimatedStart))
+        const _EstimatedPeriodLegend(),
+      if (monthDays.any((day) => day.isEstimated && day.phase != null))
+        const _EstimatedPhaseLegend(),
       for (final status in ProtectionStatus.values)
         if (monthDays.any(
           (day) => day.intercourseEntry?.protectionStatus == status,
         ))
           _IntercourseLegend(protectionStatus: status),
+      for (final result in OvulationTestResult.values)
+        if (monthDays.any((day) => day.ovulationTest?.result == result))
+          _OvulationTestLegend(result: result),
       for (final stageType in LifeStageType.values)
         if (monthDays.any((day) => day.lifeStageType == stageType))
           _LifeStageLegend(lifeStageType: stageType),
       if (monthDays.any((day) => day.isPregnancyDueDate))
-        const _PregnancyDueDateLegend(),
+        const _BabyLegend(born: false),
+      if (monthDays.any((day) => day.isBabyBornDate))
+        const _BabyLegend(born: true),
     ];
   }
 
-  PeriodEntry? _recordedEntryFor(DateTime date) {
-    for (final entry in widget.controller.periodEntries) {
+  PeriodEntry? _recordedEntryFor(DateTime date) =>
+      _entryContaining(widget.controller.periodEntries, date);
+
+  PeriodEntry? _entryContaining(List<PeriodEntry> entries, DateTime date) {
+    for (final entry in entries) {
       if (entry.contains(date)) return entry;
     }
     return null;
@@ -394,7 +511,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final picked = await showDatePicker(
       context: context,
       initialDate: now,
-      firstDate: isPostpartum ? profile.dueDate! : DateTime(1900),
+      firstDate: isPostpartum ? profile.postpartumAnchor! : DateTime(1900),
       lastDate: now,
       helpText: isPostpartum
           ? 'First period after pregnancy'
@@ -438,12 +555,49 @@ class _CalendarScreenState extends State<CalendarScreen> {
         );
       case _CalendarDayAction.removeSex:
         return widget.controller.deleteIntercourseEntry(dayState.date);
+      case _CalendarDayAction.positiveTest:
+        return widget.controller.saveOvulationTest(
+          dayState.date,
+          OvulationTestResult.positive,
+        );
+      case _CalendarDayAction.negativeTest:
+        return widget.controller.saveOvulationTest(
+          dayState.date,
+          OvulationTestResult.negative,
+        );
+      case _CalendarDayAction.removeTest:
+        return widget.controller.deleteOvulationTest(dayState.date);
       case _CalendarDayAction.addPeriod:
         return widget.controller.logPeriodStart(dayState.date);
+      case _CalendarDayAction.confirmEstimatedPeriod:
+        final estimated = dayState.estimatedPeriodEntry;
+        if (estimated != null) {
+          await widget.controller.logPeriodStart(estimated.startDate);
+        }
+      case _CalendarDayAction.adjustEstimatedPeriod:
+        await _adjustEstimatedPeriod(context, dayState);
       case _CalendarDayAction.managePeriod:
         final entry = _periodEntryFor(dayState);
         if (entry != null) await _managePeriodEntry(context, entry);
     }
+  }
+
+  /// Lets the person move an estimated start onto the day it really began.
+  Future<void> _adjustEstimatedPeriod(
+    BuildContext context,
+    _CalendarDayState dayState,
+  ) async {
+    final estimated = dayState.estimatedPeriodEntry;
+    if (estimated == null) return;
+    final now = appNow();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: estimated.startDate.isAfter(now) ? now : estimated.startDate,
+      firstDate: DateTime(1900),
+      lastDate: now,
+      helpText: 'When did this period start?',
+    );
+    if (picked != null) await widget.controller.logPeriodStart(picked);
   }
 
   PeriodEntry? _periodEntryFor(_CalendarDayState dayState) {
@@ -594,42 +748,64 @@ enum _CalendarDayAction {
   protectedSex,
   unprotectedSex,
   removeSex,
+  positiveTest,
+  negativeTest,
+  removeTest,
   addPeriod,
+  confirmEstimatedPeriod,
+  adjustEstimatedPeriod,
   managePeriod,
 }
 
 typedef _CalendarDayEvents = ({
   PeriodEntry? period,
+  PeriodEntry? estimatedPeriod,
   IntercourseEntry? intercourse,
+  OvulationTestEntry? ovulationTest,
   LifeStageType? lifeStage,
 });
 
 typedef _CalendarDayMarkers = ({
   bool today,
   bool periodStart,
+  bool estimatedStart,
   bool pregnancyDue,
+  bool babyBorn,
 });
+
+/// A positive ovulation test and how far it sits from the estimated
+/// ovulation day: negative values are earlier, positive values later.
+typedef _PositiveTestNote = ({DateTime date, int offsetDays});
 
 class _CalendarDayState {
   const _CalendarDayState({
     required this.date,
     required this.phase,
+    required this.isEstimated,
     required this.events,
     required this.markers,
   });
 
   final DateTime date;
   final CyclePhase? phase;
+
+  /// Whether this day's coloring comes from an estimate rather than from a
+  /// cycle bounded by two recorded period starts.
+  final bool isEstimated;
   final _CalendarDayEvents events;
   final _CalendarDayMarkers markers;
 
   int get day => date.day;
   PeriodEntry? get recordedPeriodEntry => events.period;
+  PeriodEntry? get estimatedPeriodEntry => events.estimatedPeriod;
   IntercourseEntry? get intercourseEntry => events.intercourse;
+  OvulationTestEntry? get ovulationTest => events.ovulationTest;
   LifeStageType? get lifeStageType => events.lifeStage;
   bool get isToday => markers.today;
   bool get isLoggedStart => markers.periodStart;
+  bool get isEstimatedStart => markers.estimatedStart;
   bool get isPregnancyDueDate => markers.pregnancyDue;
+  bool get isBabyBornDate => markers.babyBorn;
   bool get hasPeriodEntry => recordedPeriodEntry != null || isLoggedStart;
 }
 
@@ -657,12 +833,79 @@ class _CalendarDayEditorSheet extends StatelessWidget {
             _intercourseOption(context, status),
           if (dayState.intercourseEntry != null) _removeSexOption(context),
           const Divider(height: 1),
+          const _SectionLabel('Ovulation test'),
+          for (final result in OvulationTestResult.values)
+            _ovulationTestOption(context, result),
+          if (dayState.ovulationTest != null) _removeTestOption(context),
+          const Divider(height: 1),
+          if (dayState.estimatedPeriodEntry != null) ...[
+            _estimatedPeriodSection(context),
+            const Divider(height: 1),
+          ],
           _periodOption(context),
           const SizedBox(height: 12),
         ],
       ),
     ),
   );
+
+  Widget _ovulationTestOption(
+    BuildContext context,
+    OvulationTestResult result,
+  ) => ListTile(
+    leading: Icon(
+      _iconForTestResult(result),
+      color: _colorForTestResult(context, result),
+    ),
+    title: Text(
+      result == OvulationTestResult.positive ? 'Positive' : 'Negative',
+    ),
+    trailing: dayState.ovulationTest?.result == result
+        ? const Icon(Icons.check_rounded)
+        : null,
+    onTap: () => Navigator.pop(
+      context,
+      result == OvulationTestResult.positive
+          ? _CalendarDayAction.positiveTest
+          : _CalendarDayAction.negativeTest,
+    ),
+  );
+
+  Widget _removeTestOption(BuildContext context) => ListTile(
+    leading: const Icon(Icons.close_rounded),
+    title: const Text('Remove test result'),
+    onTap: () => Navigator.pop(context, _CalendarDayAction.removeTest),
+  );
+
+  /// Offers the three honest answers to an estimated period: it happened, it
+  /// happened on another day, or leave the estimate alone by closing the sheet.
+  Widget _estimatedPeriodSection(BuildContext context) {
+    final estimatedStart = dayState.estimatedPeriodEntry!.startDate;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const _SectionLabel(
+          'Estimated period — confirm it happened, adjust the date, or '
+          'ignore it',
+        ),
+        ListTile(
+          leading: const Icon(Icons.check_circle_outline_rounded),
+          title: const Text('Confirm this period'),
+          subtitle: Text(
+            'Logs ${DateFormat.yMMMd().format(estimatedStart)} as the start',
+          ),
+          onTap: () =>
+              Navigator.pop(context, _CalendarDayAction.confirmEstimatedPeriod),
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_calendar_outlined),
+          title: const Text('Adjust the date'),
+          onTap: () =>
+              Navigator.pop(context, _CalendarDayAction.adjustEstimatedPeriod),
+        ),
+      ],
+    );
+  }
 
   Widget _intercourseOption(
     BuildContext context,
@@ -838,6 +1081,7 @@ class _MonthPickerSheetState extends State<_MonthPickerSheet> {
 class _MonthSummaryCard extends StatelessWidget {
   const _MonthSummaryCard({
     required this.month,
+    required this.today,
     required this.isPregnant,
     required this.isPostpartum,
     required this.configuredLength,
@@ -846,9 +1090,15 @@ class _MonthSummaryCard extends StatelessWidget {
     required this.insights,
     required this.periodEntries,
     required this.usualPeriodLength,
+    required this.estimatedStarts,
+    required this.breastfeedingSince,
+    required this.lastRecordedStart,
+    required this.positiveTests,
+    required this.negativeTestCount,
   });
 
   final DateTime month;
+  final DateTime today;
   final bool isPregnant;
   final bool isPostpartum;
   final int configuredLength;
@@ -857,6 +1107,13 @@ class _MonthSummaryCard extends StatelessWidget {
   final List<CycleIntervalInsight> insights;
   final List<PeriodEntry> periodEntries;
   final int usualPeriodLength;
+
+  /// Estimated period starts that are shown in this month.
+  final List<DateTime> estimatedStarts;
+  final DateTime? breastfeedingSince;
+  final DateTime? lastRecordedStart;
+  final List<_PositiveTestNote> positiveTests;
+  final int negativeTestCount;
 
   @override
   Widget build(BuildContext context) {
@@ -932,7 +1189,10 @@ class _MonthSummaryCard extends StatelessWidget {
     final estimateNote =
         'Estimated coloring uses a $estimatedLength-day cycle from $estimateSource.';
     final messages = <String>[
-      if (insights.isEmpty) 'No period start was recorded this month.',
+      ..._breastfeedingMessages(),
+      if (estimatedStarts.isNotEmpty) _estimatedPeriodMessage(),
+      if (insights.isEmpty && estimatedStarts.isEmpty)
+        'No period start was recorded this month.',
       ...insights.map(_messageFor),
       ...periodEntries
           .where(
@@ -941,9 +1201,87 @@ class _MonthSummaryCard extends StatelessWidget {
                 entry.startDate.month == month.month,
           )
           .map(_durationMessageFor),
+      ..._ovulationTestMessages(),
       estimateNote,
     ];
     return messages.join('\n\n');
+  }
+
+  /// Calm context for breastfeeding: periods commonly pause, and when one does
+  /// return it can stop again without anything being wrong.
+  List<String> _breastfeedingMessages() {
+    final since = breastfeedingSince;
+    if (since == null) return const [];
+    final latest = lastRecordedStart;
+    final periodSinceBreastfeeding = latest != null && !latest.isBefore(since);
+    final messages = <String>[
+      'Breastfeeding since ${DateFormat.MMMMd().format(since)}. Periods often '
+          'stay away for months while breastfeeding (lactational amenorrhoea), '
+          'so the dates and predictions here are less reliable than usual.',
+    ];
+    if (periodSinceBreastfeeding && today.difference(latest).inDays >= 60) {
+      messages.add(
+        'A period returned on ${DateFormat.MMMMd().format(latest)} and none has '
+        'been logged since. Cycles often stop and restart while breastfeeding, '
+        'especially when feeding patterns change — this is usually normal.',
+      );
+    } else if (!periodSinceBreastfeeding &&
+        today.difference(since).inDays >= 365) {
+      messages.add(
+        'No period has been logged since breastfeeding began over a year ago. '
+        'That can still be normal, and if you would like it looked at, '
+        'consider talking with a healthcare professional.',
+      );
+    }
+    return messages;
+  }
+
+  String _estimatedPeriodMessage() {
+    final labels = estimatedStarts
+        .map(DateFormat.MMMMd().format)
+        .toList(growable: false);
+    final dates = labels.length == 1
+        ? labels.single
+        : '${labels.take(labels.length - 1).join(', ')} and ${labels.last}';
+    final lead = insights.isEmpty ? 'No period was logged this month. ' : '';
+    return labels.length == 1
+        ? '${lead}The period shown around $dates is estimated from your usual '
+              'cycle — tap it on the calendar to confirm or adjust.'
+        : '${lead}The periods shown around $dates are estimated from your usual '
+              'cycle — tap them on the calendar to confirm or adjust.';
+  }
+
+  /// Test results are described next to the estimate, never folded into it.
+  List<String> _ovulationTestMessages() {
+    if (positiveTests.isNotEmpty) {
+      return [
+        for (final test in positiveTests) _positiveTestMessage(test),
+        'Test results are kept for your reference and do not change the '
+            'estimates.',
+      ];
+    }
+    if (negativeTestCount == 0) return const [];
+    return [
+      '$negativeTestCount negative ovulation '
+          '${negativeTestCount == 1 ? 'test' : 'tests'} recorded this month. '
+          'Test results are kept for your reference and do not change the '
+          'estimates.',
+    ];
+  }
+
+  String _positiveTestMessage(_PositiveTestNote test) {
+    final date = DateFormat.MMMMd().format(test.date);
+    final distance = test.offsetDays.abs();
+    final days = distance == 1 ? 'day' : 'days';
+    return switch (test.offsetDays.compareTo(0)) {
+      < 0 =>
+        'Positive ovulation test on $date, $distance $days before the '
+            'estimated ovulation day.',
+      > 0 =>
+        'Positive ovulation test on $date, $distance $days after the '
+            'estimated ovulation day.',
+      _ => 'Positive ovulation test on $date, the estimated ovulation day.',
+    };
   }
 
   String _messageFor(CycleIntervalInsight insight) {
@@ -1017,6 +1355,7 @@ class _DayCell extends StatelessWidget {
     final stageType = dayState.lifeStageType;
     final stageColor = stageType == null ? null : _colorForLifeStage(stageType);
     final color = stageColor ?? _dayCellColor(context, dayState);
+    final marksBaby = dayState.isPregnancyDueDate || dayState.isBabyBornDate;
     return Material(
       color: stageType == LifeStageType.pregnancy
           ? _pregnancyBackground(context)
@@ -1024,15 +1363,10 @@ class _DayCell extends StatelessWidget {
           ? _postpartumBackground(context)
           : dayState.phase == null
           ? Theme.of(context).colorScheme.surfaceContainerHighest
-          : color.withValues(
-              alpha: dayState.recordedPeriodEntry != null ? .24 : .10,
-            ),
+          : color.withValues(alpha: _fillAlpha(dayState)),
       shape: CircleBorder(
-        side: dayState.isToday || dayState.isPregnancyDueDate
-            ? BorderSide(
-                color: color,
-                width: dayState.isPregnancyDueDate ? 2.5 : 2,
-              )
+        side: dayState.isToday || marksBaby
+            ? BorderSide(color: color, width: marksBaby ? 2.5 : 2)
             : BorderSide.none,
       ),
       clipBehavior: Clip.antiAlias,
@@ -1042,11 +1376,15 @@ class _DayCell extends StatelessWidget {
           alignment: Alignment.center,
           children: [
             if (dayState.phase == CyclePhase.ovulation)
-              _ovulationFlowerMarker(),
+              _ovulationFlowerMarker(dayState.isEstimated),
             _dayNumber(context),
-            if (dayState.isLoggedStart) _periodStartMarker(context),
-            if (dayState.isPregnancyDueDate) _pregnancyDueMarker(),
+            if (dayState.isLoggedStart)
+              _periodStartMarker(context)
+            else if (dayState.isEstimatedStart)
+              _estimatedStartMarker(context),
+            if (marksBaby) _babyMarker(),
             if (dayState.intercourseEntry != null) _intercourseMarker(),
+            if (dayState.ovulationTest != null) _ovulationTestMarker(context),
           ],
         ),
       ),
@@ -1063,10 +1401,14 @@ class _DayCell extends StatelessWidget {
     ),
   );
 
-  Widget _ovulationFlowerMarker() => Icon(
+  Widget _ovulationFlowerMarker(bool isEstimated) => Icon(
     Icons.local_florist_rounded,
     size: 30,
-    color: _ovulationFlowerColor.withValues(alpha: .34),
+    color: _ovulationFlowerColor.withValues(
+      alpha: isEstimated
+          ? _estimatedOvulationFlowerAlpha
+          : _ovulationFlowerAlpha,
+    ),
   );
 
   Widget _periodStartMarker(BuildContext context) => Positioned(
@@ -1081,7 +1423,24 @@ class _DayCell extends StatelessWidget {
     ),
   );
 
-  Widget _pregnancyDueMarker() => const Positioned(
+  /// A hollow ring instead of the solid dot: the same place in the cell, but
+  /// visibly unconfirmed.
+  Widget _estimatedStartMarker(BuildContext context) => Positioned(
+    bottom: 4,
+    child: Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: .75),
+          width: 1.4,
+        ),
+      ),
+    ),
+  );
+
+  Widget _babyMarker() => const Positioned(
     bottom: 3,
     child: Icon(Icons.child_care, size: 13, color: _postpartumColor),
   );
@@ -1098,10 +1457,35 @@ class _DayCell extends StatelessWidget {
       ),
     );
   }
+
+  Widget _ovulationTestMarker(BuildContext context) {
+    final result = dayState.ovulationTest!.result;
+    return Positioned(
+      top: 3,
+      right: 3,
+      child: Icon(
+        _iconForTestResult(result),
+        size: 12,
+        color: _colorForTestResult(context, result),
+      ),
+    );
+  }
+}
+
+/// How strongly a day's phase color is filled.
+///
+/// Recorded bleeding is the strongest; estimated days are deliberately far
+/// fainter so the calendar never presents a guess as a fact.
+double _fillAlpha(_CalendarDayState dayState) {
+  if (dayState.recordedPeriodEntry != null) return _recordedPeriodAlpha;
+  if (dayState.estimatedPeriodEntry != null) return _estimatedPeriodAlpha;
+  return dayState.isEstimated ? _estimatedPhaseAlpha : _recordedPhaseAlpha;
 }
 
 Color _dayCellColor(BuildContext context, _CalendarDayState dayState) {
-  if (dayState.isPregnancyDueDate) return _postpartumColor;
+  if (dayState.isPregnancyDueDate || dayState.isBabyBornDate) {
+    return _postpartumColor;
+  }
   final phase = dayState.phase;
   return phase == null
       ? Theme.of(context).colorScheme.outline
@@ -1112,6 +1496,7 @@ Color _colorForLifeStage(LifeStageType lifeStageType) =>
     switch (lifeStageType) {
       LifeStageType.pregnancy => _pregnancyColor,
       LifeStageType.postpartum => _postpartumColor,
+      LifeStageType.breastfeeding => _breastfeedingColor,
     };
 
 Color _colorForProtection(ProtectionStatus protectionStatus) =>
@@ -1125,6 +1510,75 @@ IconData _iconForProtection(ProtectionStatus protectionStatus) =>
       ProtectionStatus.protected => Icons.health_and_safety_outlined,
       ProtectionStatus.unprotected => Icons.favorite_outline_rounded,
     };
+
+Color _colorForTestResult(BuildContext context, OvulationTestResult result) =>
+    switch (result) {
+      OvulationTestResult.positive => _positiveTestColor(context),
+      OvulationTestResult.negative => _negativeTestColor(context),
+    };
+
+IconData _iconForTestResult(OvulationTestResult result) => switch (result) {
+  OvulationTestResult.positive => Icons.science,
+  OvulationTestResult.negative => Icons.science_outlined,
+};
+
+/// A small heading inside a bottom sheet that groups the options below it.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    ),
+  );
+}
+
+/// The quiet reminder above the month grid that periods behave differently
+/// while breastfeeding.
+class _BreastfeedingChip extends StatelessWidget {
+  const _BreastfeedingChip({required this.since});
+
+  final DateTime since;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final color = isDark ? const Color(0xFF8FC9B9) : const Color(0xFF23604F);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E332B) : const Color(0xFFEAF4F0),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.child_care_outlined, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Breastfeeding · since ${DateFormat.yMMMd().format(since)}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _LegendItem extends StatelessWidget {
   const _LegendItem({required this.phase});
@@ -1173,6 +1627,71 @@ class _PeriodStartLegend extends StatelessWidget {
       ),
       const SizedBox(width: 6),
       Text('Period start', style: Theme.of(context).textTheme.bodySmall),
+    ],
+  );
+}
+
+class _EstimatedPeriodLegend extends StatelessWidget {
+  const _EstimatedPeriodLegend();
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: .75),
+            width: 1.4,
+          ),
+        ),
+      ),
+      const SizedBox(width: 6),
+      Text('Estimated period', style: Theme.of(context).textTheme.bodySmall),
+    ],
+  );
+}
+
+class _EstimatedPhaseLegend extends StatelessWidget {
+  const _EstimatedPhaseLegend();
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(
+        Icons.auto_awesome_outlined,
+        size: 13,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      const SizedBox(width: 6),
+      Text(
+        'Faint colors = estimated',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    ],
+  );
+}
+
+class _OvulationTestLegend extends StatelessWidget {
+  const _OvulationTestLegend({required this.result});
+
+  final OvulationTestResult result;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(
+        _iconForTestResult(result),
+        size: 14,
+        color: _colorForTestResult(context, result),
+      ),
+      const SizedBox(width: 6),
+      Text(result.label, style: Theme.of(context).textTheme.bodySmall),
     ],
   );
 }
@@ -1226,8 +1745,11 @@ class _LifeStageLegend extends StatelessWidget {
   );
 }
 
-class _PregnancyDueDateLegend extends StatelessWidget {
-  const _PregnancyDueDateLegend();
+class _BabyLegend extends StatelessWidget {
+  const _BabyLegend({required this.born});
+
+  /// True once a birth date is recorded, which replaces the expected due date.
+  final bool born;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -1235,7 +1757,10 @@ class _PregnancyDueDateLegend extends StatelessWidget {
     children: [
       const Icon(Icons.child_care, size: 14, color: _postpartumColor),
       const SizedBox(width: 6),
-      Text('Expected due date', style: Theme.of(context).textTheme.bodySmall),
+      Text(
+        born ? 'Baby born' : 'Expected due date',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
     ],
   );
 }

@@ -21,8 +21,10 @@ void main() {
         'pregnancy_started_on': null,
         'due_date': null,
         'next_period_due_date': '2026-08-29',
+        'baby_born_on': null,
         'postpartum_started_on': null,
         'postpartum_ended_on': null,
+        'breastfeeding_started_on': null,
         'notifications_enabled': 1,
         'theme_mode': 'system',
       },
@@ -49,6 +51,7 @@ void main() {
           'energy': 2,
           'note': 'Slept well',
           'intercourse_protection': 'protected',
+          'ovulation_test': 'positive',
         },
       ],
       lifeStageEntries: [
@@ -110,6 +113,69 @@ void main() {
         ...data['profile']! as Map<String, Object?>,
         'theme_mode': 'neon',
       };
+
+      await expectLater(
+        codec.open(codec.readEnvelope(jsonEncode(fields))),
+        throwsA(isA<BackupFormatException>()),
+      );
+    });
+
+    test('a backup written before schema 8 still opens', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      final data = fields['data']! as Map<String, Object?>;
+      data['profile'] = {...data['profile']! as Map<String, Object?>}
+        ..remove('baby_born_on')
+        ..remove('breastfeeding_started_on');
+      data['dailyLogs'] = [
+        {'log_date': '2026-08-03', 'intercourse_protection': 'protected'},
+      ];
+
+      final restored = await codec.open(codec.readEnvelope(jsonEncode(fields)));
+
+      expect(restored.data.profile!['baby_born_on'], isNull);
+      expect(restored.data.profile!['breastfeeding_started_on'], isNull);
+      expect(restored.data.dailyLogs.single['ovulation_test'], isNull);
+      expect(
+        restored.data.dailyLogs.single['intercourse_protection'],
+        'protected',
+      );
+    });
+
+    test('a birth date, breastfeeding, and a test result round-trip', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      final data = fields['data']! as Map<String, Object?>;
+      data['profile'] = {
+        ...data['profile']! as Map<String, Object?>,
+        'is_pregnant': 1,
+        'due_date': '2026-08-20',
+        'baby_born_on': '2026-08-14',
+        'breastfeeding_started_on': '2026-08-14',
+      };
+      data['lifeStageEntries'] = [
+        {
+          'id': 4,
+          'stage_type': 'breastfeeding',
+          'start_date': '2024-02-01',
+          'end_date': '2024-11-30',
+        },
+      ];
+
+      final restored = await codec.open(codec.readEnvelope(jsonEncode(fields)));
+
+      expect(restored.data.profile!['baby_born_on'], '2026-08-14');
+      expect(restored.data.profile!['breastfeeding_started_on'], '2026-08-14');
+      expect(
+        restored.data.lifeStageEntries.single['stage_type'],
+        'breastfeeding',
+      );
+      expect(restored.data.dailyLogs.single['ovulation_test'], 'positive');
+    });
+
+    test('an unknown ovulation test result is rejected', () async {
+      final fields = jsonDecode(codec.encode(payload)) as Map<String, Object?>;
+      (fields['data']! as Map<String, Object?>)['dailyLogs'] = [
+        {'log_date': '2026-08-03', 'ovulation_test': 'maybe'},
+      ];
 
       await expectLater(
         codec.open(codec.readEnvelope(jsonEncode(fields))),

@@ -348,6 +348,187 @@ void main() {
     },
   );
 
+  group('baby has arrived', () {
+    late AppController controller;
+
+    setUp(() async {
+      // Pregnancy mode is turned on months before the birth, so the recorded
+      // birth date lands inside the allowed range.
+      appNow = () => DateTime(2026, 2, 1, 10);
+      controller = AppController.inMemory();
+      await controller.completeOnboarding(
+        UserProfile(
+          name: 'Nadia Rahman',
+          dateOfBirth: DateTime(1997, 4, 16),
+          lastPeriodStart: DateTime(2025, 11, 3),
+          cycleLength: 28,
+          periodLength: 5,
+        ),
+      );
+      await controller.setPregnancyMode(
+        enabled: true,
+        dueDate: DateTime(2026, 9, 1),
+      );
+      appNow = () => DateTime(2026, 8, 19, 10);
+    });
+
+    tearDown(() => appNow = DateTime.now);
+
+    test('postpartum is anchored on the recorded birth date', () async {
+      expect(controller.profile!.isPostpartumOn(appNow()), isFalse);
+
+      await controller.recordBirth(
+        birthDate: DateTime(2026, 8, 14),
+        breastfeeding: true,
+      );
+
+      final profile = controller.profile!;
+      expect(profile.babyBornOn, DateTime(2026, 8, 14));
+      expect(profile.postpartumStartedOn, DateTime(2026, 8, 14));
+      expect(profile.postpartumAnchor, DateTime(2026, 8, 14));
+      expect(profile.isPostpartumOn(DateTime(2026, 8, 13)), isFalse);
+      expect(profile.isPostpartumOn(DateTime(2026, 8, 14)), isTrue);
+      expect(profile.breastfeedingStartedOn, DateTime(2026, 8, 14));
+      // Period logging opens from the birth date, not the expected due date.
+      await controller.logPeriodStart(DateTime(2026, 8, 18));
+      expect(controller.profile!.isPregnant, isFalse);
+      expect(controller.profile!.postpartumStartedOn, DateTime(2026, 8, 14));
+      expect(controller.profile!.postpartumEndedOn, DateTime(2026, 8, 18));
+    });
+
+    test('the breastfeeding switch can be left off', () async {
+      await controller.recordBirth(
+        birthDate: DateTime(2026, 8, 14),
+        breastfeeding: false,
+      );
+
+      expect(controller.profile!.breastfeedingStartedOn, isNull);
+      expect(controller.profile!.babyBornOn, DateTime(2026, 8, 14));
+    });
+
+    test('a birth before pregnancy tracking started is rejected', () async {
+      expect(
+        () => controller.recordBirth(
+          birthDate: DateTime(2026, 1, 1),
+          breastfeeding: true,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => controller.recordBirth(
+          birthDate: DateTime(2026, 8, 20),
+          breastfeeding: true,
+        ),
+        throwsArgumentError,
+      );
+      expect(controller.profile!.babyBornOn, isNull);
+    });
+
+    test('the due date still triggers postpartum without a birth', () async {
+      await controller.setPregnancyMode(
+        enabled: true,
+        dueDate: DateTime(2026, 8, 18),
+      );
+
+      final profile = controller.profile!;
+      expect(profile.babyBornOn, isNull);
+      expect(profile.postpartumAnchor, DateTime(2026, 8, 18));
+      expect(profile.isPostpartumOn(appNow()), isTrue);
+    });
+  });
+
+  group('breastfeeding', () {
+    late AppController controller;
+
+    setUp(() async {
+      appNow = () => DateTime(2026, 8, 19, 10);
+      controller = AppController.inMemory();
+      await controller.completeOnboarding(
+        UserProfile(
+          name: 'Nadia Rahman',
+          dateOfBirth: DateTime(1997, 4, 16),
+          lastPeriodStart: DateTime(2026, 5, 2),
+          cycleLength: 28,
+          periodLength: 5,
+        ),
+      );
+    });
+
+    tearDown(() => appNow = DateTime.now);
+
+    test('ending it stores history and clears the profile field', () async {
+      await controller.startBreastfeeding(DateTime(2026, 5, 10));
+      expect(
+        controller.profile!.isBreastfeedingOn(DateTime(2026, 6, 1)),
+        isTrue,
+      );
+
+      await controller.endBreastfeeding(DateTime(2026, 8, 1));
+
+      expect(controller.profile!.breastfeedingStartedOn, isNull);
+      expect(
+        controller.profile!.isBreastfeedingOn(DateTime(2026, 8, 19)),
+        isFalse,
+      );
+      final entry = controller.lifeStageEntries.single;
+      expect(entry.type, LifeStageType.breastfeeding);
+      expect(entry.startDate, DateTime(2026, 5, 10));
+      expect(entry.endDate, DateTime(2026, 8, 1));
+    });
+
+    test('the range is validated at both ends', () async {
+      await controller.startBreastfeeding(DateTime(2026, 5, 10));
+
+      expect(
+        () => controller.endBreastfeeding(DateTime(2026, 5, 9)),
+        throwsArgumentError,
+      );
+      expect(
+        () => controller.endBreastfeeding(DateTime(2026, 8, 20)),
+        throwsArgumentError,
+      );
+      expect(
+        () => controller.startBreastfeeding(DateTime(2026, 8, 20)),
+        throwsArgumentError,
+      );
+      expect(controller.lifeStageEntries, isEmpty);
+    });
+
+    test('breastfeeding history may overlap postpartum history', () async {
+      await controller.saveLifeStageEntry(
+        LifeStageEntry(
+          type: LifeStageType.postpartum,
+          startDate: DateTime(2026, 5, 2),
+          endDate: DateTime(2026, 6, 13),
+        ),
+      );
+
+      await controller.startBreastfeeding(DateTime(2026, 5, 2));
+      await controller.endBreastfeeding(DateTime(2026, 8, 1));
+
+      expect(controller.lifeStageEntries, hasLength(2));
+      expect(
+        () => controller.saveLifeStageEntry(
+          LifeStageEntry(
+            type: LifeStageType.breastfeeding,
+            startDate: DateTime(2026, 7, 1),
+            endDate: DateTime(2026, 8, 10),
+          ),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('a period can still be logged while breastfeeding', () async {
+      await controller.startBreastfeeding(DateTime(2026, 5, 10));
+
+      await controller.logPeriodStart(DateTime(2026, 8, 10));
+
+      expect(controller.periodStarts.first, DateTime(2026, 8, 10));
+      expect(controller.profile!.breastfeedingStartedOn, DateTime(2026, 5, 10));
+    });
+  });
+
   group('UserProfile persistence', () {
     test('identifies postpartum dates until the first new period', () {
       final active = UserProfile(
@@ -402,8 +583,10 @@ void main() {
         isPregnant: true,
         pregnancyStartedOn: DateTime(2026, 8, 9),
         dueDate: DateTime(2027, 3, 12),
-        postpartumStartedOn: DateTime(2027, 3, 12),
+        babyBornOn: DateTime(2027, 3, 8),
+        postpartumStartedOn: DateTime(2027, 3, 8),
         postpartumEndedOn: DateTime(2027, 5, 1),
+        breastfeedingStartedOn: DateTime(2027, 3, 8),
         notificationsEnabled: false,
         themeMode: ThemeMode.dark,
       );
@@ -413,8 +596,10 @@ void main() {
       expect(restored.isPregnant, isTrue);
       expect(restored.pregnancyStartedOn, DateTime(2026, 8, 9));
       expect(restored.dueDate, DateTime(2027, 3, 12));
-      expect(restored.postpartumStartedOn, DateTime(2027, 3, 12));
+      expect(restored.babyBornOn, DateTime(2027, 3, 8));
+      expect(restored.postpartumStartedOn, DateTime(2027, 3, 8));
       expect(restored.postpartumEndedOn, DateTime(2027, 5, 1));
+      expect(restored.breastfeedingStartedOn, DateTime(2027, 3, 8));
       expect(restored.notificationsEnabled, isFalse);
       expect(restored.themeMode, ThemeMode.dark);
     });
@@ -435,9 +620,66 @@ void main() {
       expect(restored.dueDate, isNull);
       expect(restored.postpartumStartedOn, isNull);
       expect(restored.postpartumEndedOn, isNull);
+      expect(restored.babyBornOn, isNull);
+      expect(restored.breastfeedingStartedOn, isNull);
       expect(restored.notificationsEnabled, isTrue);
       expect(restored.themeMode, ThemeMode.system);
     });
+  });
+
+  testWidgets('the profile section walks pregnancy through to postpartum', (
+    tester,
+  ) async {
+    appNow = () => DateTime(2026, 8, 19, 10);
+    addTearDown(() => appNow = DateTime.now);
+    await tester.binding.setSurfaceSize(const Size(412, 915));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController.inMemory();
+    await controller.completeOnboarding(
+      UserProfile(
+        name: 'Nadia Rahman',
+        dateOfBirth: DateTime(1997, 4, 16),
+        lastPeriodStart: DateTime(2026, 8, 11),
+        cycleLength: 28,
+        periodLength: 5,
+      ),
+    );
+    await tester.pumpWidget(CycleCompassApp(controller: controller));
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Period tracking active'),
+      350,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.ensureVisible(find.text("I'm pregnant"));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text("I'm pregnant"));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Expected due date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(controller.profile!.isPregnant, isTrue);
+    expect(controller.profile!.dueDate, DateTime(2027, 1, 6));
+
+    await tester.ensureVisible(find.text('Baby has arrived'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Baby has arrived'));
+    await tester.pumpAndSettle();
+
+    expect(find.text("I'm breastfeeding"), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(controller.profile!.babyBornOn, DateTime(2026, 8, 19));
+    expect(controller.profile!.breastfeedingStartedOn, DateTime(2026, 8, 19));
+    expect(find.text('Postpartum · since 19 Aug 2026'), findsOneWidget);
+    expect(find.text('Log first period'), findsOneWidget);
   });
 
   testWidgets('pregnancy mode pauses home estimates', (tester) async {
@@ -661,14 +903,14 @@ void main() {
     await tester.tap(find.text('Profile'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
-      find.text('Add past pregnancy or postpartum'),
+      find.text('Add past history'),
       350,
       scrollable: find.byType(Scrollable).last,
     );
-    await tester.ensureVisible(find.text('Add past pregnancy or postpartum'));
+    await tester.ensureVisible(find.text('Add past history'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Add past pregnancy or postpartum'));
+    await tester.tap(find.text('Add past history'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Postpartum').last);
     await tester.pumpAndSettle();
@@ -874,11 +1116,11 @@ void main() {
     );
     await tester.ensureVisible(find.text('PREGNANCY & POSTPARTUM'));
     await tester.pumpAndSettle();
-    expect(find.text('Current mode'), findsOneWidget);
+    expect(find.text('Period tracking active'), findsOneWidget);
 
     await tester.tap(find.text('PREGNANCY & POSTPARTUM'));
     await tester.pumpAndSettle();
-    expect(find.text('Current mode'), findsNothing);
+    expect(find.text('Period tracking active'), findsNothing);
 
     await tester.scrollUntilVisible(
       find.text('Private by design'),

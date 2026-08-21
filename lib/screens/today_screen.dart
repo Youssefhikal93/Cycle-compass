@@ -396,7 +396,9 @@ class _PregnancyTodayView extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   isPostpartum
-                      ? 'Your expected due date has arrived. Cycle estimates stay paused until you record the first real period after pregnancy.'
+                      ? profile.babyBornOn == null
+                            ? 'Your expected due date has arrived. Cycle estimates stay paused until you record the first real period after pregnancy.'
+                            : 'The birth is recorded. Cycle estimates stay paused until you record the first real period after pregnancy.'
                       : 'Period and ovulation estimates are paused. Your previous cycle history is safely kept on this device.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -404,7 +406,7 @@ class _PregnancyTodayView extends StatelessWidget {
                     height: 1.45,
                   ),
                 ),
-                if (profile.dueDate != null) ...[
+                if (profile.postpartumAnchor != null) ...[
                   const SizedBox(height: 18),
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -422,8 +424,10 @@ class _PregnancyTodayView extends StatelessWidget {
                         Expanded(
                           child: Text(
                             isPostpartum
-                                ? 'Postpartum from expected due date: ${DateFormat.yMMMMd().format(profile.dueDate!)}'
-                                : 'Expected due date: ${DateFormat.yMMMMd().format(profile.dueDate!)}',
+                                ? profile.babyBornOn == null
+                                      ? 'Postpartum from expected due date: ${DateFormat.yMMMMd().format(profile.postpartumAnchor!)}'
+                                      : 'Postpartum since the birth on ${DateFormat.yMMMMd().format(profile.babyBornOn!)}'
+                                : 'Expected due date: ${DateFormat.yMMMMd().format(profile.postpartumAnchor!)}',
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                         ),
@@ -471,8 +475,8 @@ class _PregnancyTodayView extends StatelessWidget {
 
   Future<void> _logFirstPostpartumPeriod(BuildContext context) async {
     final today = appNow();
-    final dueDate = profile.dueDate!;
-    final firstDate = DateTime(dueDate.year, dueDate.month, dueDate.day);
+    final anchor = profile.postpartumAnchor!;
+    final firstDate = DateTime(anchor.year, anchor.month, anchor.day);
     final picked = await showDatePicker(
       context: context,
       initialDate: today,

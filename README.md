@@ -17,14 +17,25 @@ calendar predictions are clearly presented as estimates.
 - Today view with cycle day, estimated phase, and next-period estimate
 - Calendar view with phase colors, editable bleeding ranges, due dates, and
   data-based early/late summaries
-- Day editor for recording protected or unprotected sex with distinct calendar
-  icons
+- Estimated periods for months with no logged period: faint fills, a hollow
+  start marker, a month note, and a tap action to confirm, adjust, or ignore
+  each estimate
+- Faint phase coloring for every day outside a cycle bounded by two recorded
+  period starts, so estimates never look like recorded facts
+- Day editor for recording protected or unprotected sex, and positive or
+  negative ovulation tests, with distinct calendar icons
 - Calendar legends that appear only when their phase or event is visible in
   the displayed month
-- Educational content for menstruation, follicular, ovulation, and luteal stages
+- Educational phase content on the Today screen (the separate Learn tab is
+  hidden for now; its content is retained in the codebase)
 - Pregnancy mode with required due date and automatic postpartum transition
+- "Baby has arrived" flow that anchors postpartum on the real birth date and
+  moves the calendar's baby marker there
+- Breastfeeding tracking that runs until it is ended, adds calm lactational
+  amenorrhoea wording, and never hides period colors
 - Postpartum calendar coloring until the first new period is recorded
-- Editable past pregnancy and postpartum ranges for historical tracking
+- Editable past pregnancy, postpartum, and breastfeeding ranges for historical
+  tracking
 - Editable period history with one-tap extra-day adjustments
 - Default-on Android reminders for every estimated cycle phase around 9:00 AM and
   for tracking-mode changes; scheduled reminders are restored after reboot
@@ -36,7 +47,7 @@ calendar predictions are clearly presented as estimates.
 - Theme choice in settings: system, light, or dark
 - Day-first European dates everywhere, including DD/MM/YYYY manual entry
 - Calendar month/year scroll wheels, swipe navigation, and a baby icon on the
-  expected pregnancy due date
+  expected due date until a real birth date replaces it
 - Branded blood-drop splash screen and launcher icon in the app palette
 - Responsive Material 3 interface with rendered phone-size preview tests
 
@@ -45,6 +56,10 @@ calendar predictions are clearly presented as estimates.
 | Onboarding | Today | Profile |
 | --- | --- | --- |
 | ![Onboarding](test/goldens/onboarding.png) | ![Today](test/goldens/home.png) | ![Profile](test/goldens/profile.png) |
+
+| Estimated periods | Dark theme calendar |
+| --- | --- |
+| ![Estimated periods](test/goldens/calendar-estimated.png) | ![Dark calendar](test/goldens/calendar-dark.png) |
 
 ## Project structure
 
@@ -73,9 +88,12 @@ Requirements:
 ```bash
 flutter pub get
 flutter analyze
-flutter test
+flutter test --concurrency 2
 flutter run
 ```
+
+`--concurrency 2` keeps the suite inside the memory budget of a typical
+development machine; the golden previews are the expensive part.
 
 The configured app ID is `com.hikoo.cyclecompass.cycle_compass`. Release signing
 must be configured before publishing to Google Play.
@@ -83,6 +101,6 @@ must be configured before publishing to Google Play.
 ## Current verification
 
 - Flutter static analysis: no issues
-- Full unit, widget, and golden-preview suite: 73 tests passing
+- Full unit, widget, and golden-preview suite: 116 tests passing
 - Golden previews render with a pinned clock, so they are stable over time
 - Android debug APK: built successfully

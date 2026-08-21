@@ -1,21 +1,32 @@
-enum LifeStageType { pregnancy, postpartum }
+enum LifeStageType { pregnancy, postpartum, breastfeeding }
 
 extension LifeStageTypeCopy on LifeStageType {
   String get label => switch (this) {
     LifeStageType.pregnancy => 'Pregnancy',
     LifeStageType.postpartum => 'Postpartum',
+    LifeStageType.breastfeeding => 'Breastfeeding',
   };
 
   String get storageValue => switch (this) {
     LifeStageType.pregnancy => 'pregnancy',
     LifeStageType.postpartum => 'postpartum',
+    LifeStageType.breastfeeding => 'breastfeeding',
   };
+
+  /// Whether two stored ranges of this type are allowed to overlap each other.
+  ///
+  /// Breastfeeding runs alongside postpartum and can even overlap a new
+  /// pregnancy, so it is only checked against other breastfeeding ranges.
+  bool overlapsAllowedWith(LifeStageType other) =>
+      (this == LifeStageType.breastfeeding) !=
+      (other == LifeStageType.breastfeeding);
 }
 
 LifeStageType lifeStageTypeFromStorage(String storageValue) =>
     switch (storageValue) {
       'pregnancy' => LifeStageType.pregnancy,
       'postpartum' => LifeStageType.postpartum,
+      'breastfeeding' => LifeStageType.breastfeeding,
       _ => throw FormatException('Unknown life stage type: $storageValue'),
     };
 

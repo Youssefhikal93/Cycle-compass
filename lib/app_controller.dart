@@ -6,8 +6,10 @@ import 'services/backup_codec.dart';
 import 'services/clock.dart';
 import 'models/intercourse_entry.dart';
 import 'models/life_stage_entry.dart';
+import 'models/ovulation_test_entry.dart';
 import 'models/period_entry.dart';
 import 'models/user_profile.dart';
+import 'services/cycle_calculator.dart';
 import 'services/cycle_notification_service.dart';
 
 class AppController extends ChangeNotifier {
@@ -26,16 +28,50 @@ class AppController extends ChangeNotifier {
   UserProfile? _profile;
   List<PeriodEntry> _periodEntries = const [];
   List<IntercourseEntry> _intercourseEntries = const [];
+  List<OvulationTestEntry> _ovulationTestEntries = const [];
   List<LifeStageEntry> _lifeStageEntries = const [];
 
   UserProfile? get profile => _profile;
   List<PeriodEntry> get periodEntries => List.unmodifiable(_periodEntries);
   List<IntercourseEntry> get intercourseEntries =>
       List.unmodifiable(_intercourseEntries);
+  List<OvulationTestEntry> get ovulationTestEntries =>
+      List.unmodifiable(_ovulationTestEntries);
   List<LifeStageEntry> get lifeStageEntries =>
       List.unmodifiable(_lifeStageEntries);
   List<DateTime> get periodStarts =>
       _periodEntries.map((entry) => entry.startDate).toList(growable: false);
+
+  /// Periods that were expected but never logged, up to today.
+  ///
+  /// These are derived on every read, so they are never stored, never part of
+  /// [periodStarts] or [periodEntries], never in a backup, and never used by
+  /// the cycle statistics. Tracking modes that legitimately stop periods —
+  /// pregnancy, postpartum, and breastfeeding — produce no estimates at all.
+  List<PeriodEntry> get estimatedPeriodEntries {
+    final current = _profile;
+    if (current == null || _periodEntries.isEmpty) return const [];
+    if (current.isPregnant) return const [];
+    final today = _day(appNow());
+    if (current.isBreastfeedingOn(today)) return const [];
+    const calculator = CycleCalculator();
+    final starts = calculator.estimatedPeriodStarts(
+      recordedStarts: periodStarts,
+      cycleLength: calculator.estimatedCycleLength(
+        periodStarts: periodStarts,
+        configuredLength: current.cycleLength,
+      ),
+      through: today,
+    );
+    return [
+      for (final start in starts)
+        PeriodEntry(
+          startDate: start,
+          endDate: start.add(Duration(days: current.periodLength - 1)),
+        ),
+    ];
+  }
+
   bool get isOnboarded => _profile != null;
   ThemeMode get themeMode => _profile?.themeMode ?? ThemeMode.system;
   bool get notificationsAllowed => _notificationPermissionGranted;
@@ -48,6 +84,7 @@ class AppController extends ChangeNotifier {
       _profile = await database.readProfile();
       _periodEntries = await database.readPeriodEntries();
       _intercourseEntries = await database.readIntercourseEntries();
+      _ovulationTestEntries = await database.readOvulationTests();
       _lifeStageEntries = await database.readLifeStageEntries();
     }
     _notificationPermissionGranted =
@@ -84,27 +121,32 @@ class AppController extends ChangeNotifier {
     final current = _profile;
     if (current == null) return;
     final normalized = DateTime(date.year, date.month, date.day);
-    final pregnancyDueDate = current.dueDate;
-    if (current.isPregnant && pregnancyDueDate == null) {
+    // A recorded birth date replaces the expected due date as the moment
+    // postpartum tracking — and period logging — becomes available again.
+    final postpartumAnchor = current.postpartumAnchor;
+    if (current.isPregnant && postpartumAnchor == null) {
       throw StateError('Pregnancy mode requires an expected due date.');
     }
     if (current.isPregnant &&
-        pregnancyDueDate != null &&
-        normalized.isBefore(pregnancyDueDate)) {
+        postpartumAnchor != null &&
+        normalized.isBefore(postpartumAnchor)) {
       throw StateError(
-        'Period logging stays paused until the expected due date.',
+        current.babyBornOn == null
+            ? 'Period logging stays paused until the expected due date.'
+            : 'Period logging stays paused until the recorded birth date.',
       );
     }
     final resumesAfterPregnancy =
         current.isPregnant &&
-        pregnancyDueDate != null &&
-        !normalized.isBefore(pregnancyDueDate);
+        postpartumAnchor != null &&
+        !normalized.isBefore(postpartumAnchor);
     final trackingProfile = resumesAfterPregnancy
         ? current.copyWith(
             isPregnant: false,
             pregnancyStartedOn: null,
             dueDate: null,
-            postpartumStartedOn: pregnancyDueDate,
+            postpartumStartedOn:
+                current.postpartumStartedOn ?? postpartumAnchor,
             postpartumEndedOn: normalized,
           )
         : current;
@@ -225,6 +267,9 @@ class AppController extends ChangeNotifier {
           ? current.pregnancyStartedOn ?? _day(appNow())
           : null,
       dueDate: enabled && dueDate != null ? _day(dueDate) : null,
+      // Switching the mode itself always starts from an expected due date; a
+      // birth is recorded afterwards through [recordBirth].
+      babyBornOn: null,
       postpartumStartedOn: enabled && dueDate != null ? _day(dueDate) : null,
       postpartumEndedOn: null,
     );
@@ -234,6 +279,79 @@ class AppController extends ChangeNotifier {
     await _syncNotifications();
     if (modeChanged) await _announceCurrentMode();
     notifyListeners();
+  }
+
+  /// Records the day the baby arrived and moves tracking into postpartum.
+  ///
+  /// Postpartum is anchored on the recorded birth date rather than the expected
+  /// due date, and breastfeeding — when [breastfeeding] is true — starts on the
+  /// same day.
+  Future<void> recordBirth({
+    required DateTime birthDate,
+    required bool breastfeeding,
+  }) async {
+    final current = _profile;
+    if (current == null) return;
+    if (!current.isPregnant) {
+      throw StateError('A birth date can only be recorded during pregnancy.');
+    }
+    final born = _day(birthDate);
+    if (born.isAfter(_day(appNow()))) {
+      throw ArgumentError('A birth date cannot be in the future.');
+    }
+    final pregnancyStart = current.pregnancyStartedOn;
+    if (pregnancyStart != null && born.isBefore(_day(pregnancyStart))) {
+      throw ArgumentError(
+        'A birth date cannot be before pregnancy tracking started.',
+      );
+    }
+    final updated = current.copyWith(
+      babyBornOn: born,
+      postpartumStartedOn: born,
+      postpartumEndedOn: null,
+      breastfeedingStartedOn: breastfeeding
+          ? current.breastfeedingStartedOn ?? born
+          : current.breastfeedingStartedOn,
+    );
+    final modeChanged = _trackingModeChanged(current, updated);
+    await _database?.saveProfile(updated);
+    _profile = updated;
+    await _syncNotifications();
+    if (modeChanged) await _announceCurrentMode();
+    notifyListeners();
+  }
+
+  /// Starts breastfeeding on [start]; it stays active until it is ended.
+  Future<void> startBreastfeeding(DateTime start) async {
+    final current = _profile;
+    if (current == null) return;
+    final day = _day(start);
+    if (day.isAfter(_day(appNow()))) {
+      throw ArgumentError('Breastfeeding cannot start in the future.');
+    }
+    await updateProfile(current.copyWith(breastfeedingStartedOn: day));
+  }
+
+  /// Ends breastfeeding on [end] and keeps the range as life-stage history.
+  Future<void> endBreastfeeding(DateTime end) async {
+    final current = _profile;
+    final startedOn = current?.breastfeedingStartedOn;
+    if (current == null || startedOn == null) return;
+    final endDay = _day(end);
+    if (endDay.isBefore(_day(startedOn))) {
+      throw ArgumentError('Breastfeeding cannot end before it started.');
+    }
+    if (endDay.isAfter(_day(appNow()))) {
+      throw ArgumentError('Breastfeeding cannot end in the future.');
+    }
+    await saveLifeStageEntry(
+      LifeStageEntry(
+        type: LifeStageType.breastfeeding,
+        startDate: startedOn,
+        endDate: endDay,
+      ),
+    );
+    await updateProfile(_profile!.copyWith(breastfeedingStartedOn: null));
   }
 
   Future<void> setThemeMode(ThemeMode themeMode) async {
@@ -307,6 +425,48 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  OvulationTestEntry? ovulationTestOn(DateTime date) {
+    final normalizedDate = _day(date);
+    for (final entry in _ovulationTestEntries) {
+      if (entry.date == normalizedDate) return entry;
+    }
+    return null;
+  }
+
+  /// Saves one ovulation test result for [date].
+  ///
+  /// Results are recorded for reference only: no estimate, phase, or reminder
+  /// reads them, so a test never moves a prediction.
+  Future<void> saveOvulationTest(
+    DateTime date,
+    OvulationTestResult result,
+  ) async {
+    final normalizedDate = _day(date);
+    if (normalizedDate.isAfter(_day(appNow()))) {
+      throw ArgumentError(
+        'An ovulation test cannot be recorded in the future.',
+      );
+    }
+    final entry = OvulationTestEntry(date: normalizedDate, result: result);
+    await _database?.saveOvulationTest(entry);
+    _ovulationTestEntries = [
+      entry,
+      ..._ovulationTestEntries.where(
+        (existing) => existing.date != normalizedDate,
+      ),
+    ];
+    notifyListeners();
+  }
+
+  Future<void> deleteOvulationTest(DateTime date) async {
+    final normalizedDate = _day(date);
+    await _database?.deleteOvulationTest(normalizedDate);
+    _ovulationTestEntries = _ovulationTestEntries
+        .where((entry) => entry.date != normalizedDate)
+        .toList(growable: false);
+    notifyListeners();
+  }
+
   Future<void> saveLifeStageEntry(LifeStageEntry entry) async {
     final normalizedEntry = _normalizedLifeStageEntry(entry);
     _validateLifeStageEntry(normalizedEntry);
@@ -353,7 +513,11 @@ class AppController extends ChangeNotifier {
       throw ArgumentError('Past history cannot end in the future.');
     }
     if (_overlapsSavedLifeStage(entry)) {
-      throw ArgumentError('Pregnancy and postpartum history cannot overlap.');
+      throw ArgumentError(
+        entry.type == LifeStageType.breastfeeding
+            ? 'Breastfeeding history cannot overlap another breastfeeding range.'
+            : 'Pregnancy and postpartum history cannot overlap.',
+      );
     }
     if (_overlapsActiveLifeStage(entry)) {
       throw ArgumentError(
@@ -362,9 +526,12 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Breastfeeding runs alongside postpartum, so it is only checked against
+  /// other breastfeeding ranges and vice versa.
   bool _overlapsSavedLifeStage(LifeStageEntry entry) => _lifeStageEntries.any(
     (existing) =>
         existing.id != entry.id &&
+        !entry.type.overlapsAllowedWith(existing.type) &&
         !entry.endDate.isBefore(existing.startDate) &&
         !entry.startDate.isAfter(existing.endDate),
   );
@@ -372,7 +539,8 @@ class AppController extends ChangeNotifier {
   bool _overlapsActiveLifeStage(LifeStageEntry entry) {
     final current = _profile;
     final activeStart = current?.pregnancyStartedOn;
-    return current?.isPregnant == true &&
+    return entry.type != LifeStageType.breastfeeding &&
+        current?.isPregnant == true &&
         activeStart != null &&
         !entry.endDate.isBefore(_day(activeStart));
   }
@@ -413,15 +581,7 @@ class AppController extends ChangeNotifier {
                   },
                 )
                 .toList(growable: false),
-            dailyLogs: _intercourseEntries
-                .map(
-                  (entry) => <String, Object?>{
-                    'log_date': _dateOnly(entry.date),
-                    'intercourse_protection':
-                        entry.protectionStatus.storageValue,
-                  },
-                )
-                .toList(growable: false),
+            dailyLogs: _inMemoryDailyLogs(),
             lifeStageEntries: _lifeStageEntries
                 .map(
                   (entry) => <String, Object?>{
@@ -435,6 +595,25 @@ class AppController extends ChangeNotifier {
           )
         : await database.exportAllData();
     return BackupPayload(exportedAt: appNow(), data: data);
+  }
+
+  /// One `daily_logs` row per day that carries any entry, mirroring how SQLite
+  /// stores sex and ovulation-test data side by side.
+  List<Map<String, Object?>> _inMemoryDailyLogs() {
+    final dates = <DateTime>{
+      for (final entry in _intercourseEntries) entry.date,
+      for (final entry in _ovulationTestEntries) entry.date,
+    }.toList()..sort();
+    return [
+      for (final date in dates)
+        <String, Object?>{
+          'log_date': _dateOnly(date),
+          'intercourse_protection': intercourseEntryOn(
+            date,
+          )?.protectionStatus.storageValue,
+          'ovulation_test': ovulationTestOn(date)?.result.storageValue,
+        },
+    ];
   }
 
   /// Replaces all local data with [payload] and reloads the app state.
@@ -471,6 +650,19 @@ class AppController extends ChangeNotifier {
               )
               .toList()
             ..sort((a, b) => b.date.compareTo(a.date));
+      _ovulationTestEntries =
+          payload.data.dailyLogs
+              .where((row) => row['ovulation_test'] != null)
+              .map(
+                (row) => OvulationTestEntry(
+                  date: DateTime.parse(row['log_date']! as String),
+                  result: ovulationTestResultFromStorage(
+                    row['ovulation_test']! as String,
+                  ),
+                ),
+              )
+              .toList()
+            ..sort((a, b) => b.date.compareTo(a.date));
       _lifeStageEntries =
           payload.data.lifeStageEntries
               .map(
@@ -488,6 +680,7 @@ class AppController extends ChangeNotifier {
       _profile = await database.readProfile();
       _periodEntries = await database.readPeriodEntries();
       _intercourseEntries = await database.readIntercourseEntries();
+      _ovulationTestEntries = await database.readOvulationTests();
       _lifeStageEntries = await database.readLifeStageEntries();
     }
     await _syncNotifications();
@@ -500,6 +693,7 @@ class AppController extends ChangeNotifier {
     _profile = null;
     _periodEntries = const [];
     _intercourseEntries = const [];
+    _ovulationTestEntries = const [];
     _lifeStageEntries = const [];
     notifyListeners();
   }

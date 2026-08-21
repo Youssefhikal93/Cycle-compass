@@ -144,6 +144,32 @@ class CycleCalculator {
     return median.clamp(15, 60);
   }
 
+  /// Period starts that were expected but never logged.
+  ///
+  /// Starting from the newest recorded start, the estimated cycle length is
+  /// stepped forward while the result is not after [through] (normally today),
+  /// so an estimate is never placed in the future. These dates are derived on
+  /// every read and never stored: logging a real period removes them.
+  List<DateTime> estimatedPeriodStarts({
+    required List<DateTime> recordedStarts,
+    required int cycleLength,
+    required DateTime through,
+  }) {
+    if (recordedStarts.isEmpty) return const [];
+    final starts = _normalizedStarts(recordedStarts, null);
+    final limit = _day(through);
+    final step = Duration(days: cycleLength.clamp(15, 60));
+    final estimated = <DateTime>[];
+    for (
+      var date = starts.last.add(step);
+      !date.isAfter(limit);
+      date = date.add(step)
+    ) {
+      estimated.add(date);
+    }
+    return estimated;
+  }
+
   List<CycleIntervalInsight> insightsForMonth({
     required DateTime month,
     required List<DateTime> periodStarts,

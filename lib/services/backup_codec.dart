@@ -19,7 +19,8 @@ const _saltLength = 16;
 const _nonceLength = 12;
 const _maxKdfIterations = 2000000;
 const _protectionValues = {'protected', 'unprotected'};
-const _lifeStageValues = {'pregnancy', 'postpartum'};
+const _ovulationTestValues = {'positive', 'negative'};
+const _lifeStageValues = {'pregnancy', 'postpartum', 'breastfeeding'};
 const _themeModeValues = {'system', 'light', 'dark'};
 
 const _notABackup = 'This file is not a Cycle Compass backup.';
@@ -317,8 +318,10 @@ Map<String, Object?> _readProfileRow(Object? value) {
     // Kept so backups written before the manual due date was removed still
     // restore. The column is no longer read by the app.
     'next_period_due_date': _optionalDate(row, 'next_period_due_date'),
+    'baby_born_on': _optionalDate(row, 'baby_born_on'),
     'postpartum_started_on': _optionalDate(row, 'postpartum_started_on'),
     'postpartum_ended_on': _optionalDate(row, 'postpartum_ended_on'),
+    'breastfeeding_started_on': _optionalDate(row, 'breastfeeding_started_on'),
     'notifications_enabled': _flag(row, 'notifications_enabled', fallback: 1),
     'theme_mode':
         _optionalChoice(row, 'theme_mode', _themeModeValues) ?? 'system',
@@ -343,6 +346,11 @@ Map<String, Object?> _readDailyLogRow(Map<String, Object?> row) => {
     row,
     'intercourse_protection',
     _protectionValues,
+  ),
+  'ovulation_test': _optionalChoice(
+    row,
+    'ovulation_test',
+    _ovulationTestValues,
   ),
 };
 

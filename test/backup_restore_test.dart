@@ -2,6 +2,7 @@ import 'package:cycle_compass/app_controller.dart';
 import 'package:cycle_compass/main.dart';
 import 'package:cycle_compass/models/intercourse_entry.dart';
 import 'package:cycle_compass/models/life_stage_entry.dart';
+import 'package:cycle_compass/models/ovulation_test_entry.dart';
 import 'package:cycle_compass/models/user_profile.dart';
 import 'package:cycle_compass/screens/profile_screen.dart';
 import 'package:cycle_compass/services/backup_codec.dart';
@@ -117,6 +118,99 @@ void main() {
         DateTime(2026, 7, 4),
       ]);
       expect(controller.lifeStageEntries.single.type, LifeStageType.pregnancy);
+    });
+
+    test('breastfeeding and test results survive a round-trip', () async {
+      await controller.startBreastfeeding(DateTime(2026, 8, 5));
+      await controller.saveOvulationTest(
+        DateTime(2026, 8, 12),
+        OvulationTestResult.positive,
+      );
+      await controller.saveOvulationTest(
+        DateTime(2026, 8, 3),
+        OvulationTestResult.negative,
+      );
+
+      final payload = await controller.createBackupPayload();
+      expect(payload.data.profile!['breastfeeding_started_on'], '2026-08-05');
+      // 3 August carries both a sex entry and a test result in one row.
+      expect(payload.data.dailyLogs, hasLength(2));
+      await controller.reset();
+      await controller.restoreBackup(payload);
+
+      expect(controller.profile!.breastfeedingStartedOn, DateTime(2026, 8, 5));
+      expect(controller.ovulationTestEntries, hasLength(2));
+      expect(
+        controller.ovulationTestOn(DateTime(2026, 8, 12))?.result,
+        OvulationTestResult.positive,
+      );
+      expect(
+        controller.intercourseEntryOn(DateTime(2026, 8, 3))?.protectionStatus,
+        ProtectionStatus.protected,
+      );
+    });
+
+    test('a birth date and breastfeeding history round-trip', () async {
+      await controller.saveLifeStageEntry(
+        LifeStageEntry(
+          type: LifeStageType.breastfeeding,
+          startDate: DateTime(2023, 10, 12),
+          endDate: DateTime(2024, 6, 1),
+        ),
+      );
+      await controller.updateProfile(
+        controller.profile!.copyWith(
+          isPregnant: true,
+          pregnancyStartedOn: DateTime(2026, 3, 1),
+          dueDate: DateTime(2026, 8, 25),
+          babyBornOn: DateTime(2026, 8, 18),
+          postpartumStartedOn: DateTime(2026, 8, 18),
+        ),
+      );
+
+      final payload = await controller.createBackupPayload();
+      await controller.reset();
+      await controller.restoreBackup(payload);
+
+      expect(controller.profile!.babyBornOn, DateTime(2026, 8, 18));
+      expect(controller.profile!.postpartumAnchor, DateTime(2026, 8, 18));
+      expect(
+        controller.lifeStageEntries.where(
+          (entry) => entry.type == LifeStageType.breastfeeding,
+        ),
+        hasLength(1),
+      );
+    });
+
+    test('a backup written before schema 8 restores with nulls', () async {
+      final payload = await controller.createBackupPayload();
+      final legacyProfile = {...payload.data.profile!}
+        ..remove('baby_born_on')
+        ..remove('breastfeeding_started_on');
+      final legacyPayload = BackupPayload(
+        exportedAt: payload.exportedAt,
+        data: BackupData(
+          profile: legacyProfile,
+          periodEntries: payload.data.periodEntries,
+          dailyLogs: [
+            for (final row in payload.data.dailyLogs)
+              {...row}..remove('ovulation_test'),
+          ],
+          lifeStageEntries: payload.data.lifeStageEntries,
+        ),
+      );
+      const codec = BackupCodec();
+
+      await controller.reset();
+      await controller.restoreBackup(
+        await codec.open(codec.readEnvelope(codec.encode(legacyPayload))),
+      );
+
+      expect(controller.profile!.name, 'Nadia Rahman');
+      expect(controller.profile!.babyBornOn, isNull);
+      expect(controller.profile!.breastfeedingStartedOn, isNull);
+      expect(controller.ovulationTestEntries, isEmpty);
+      expect(controller.intercourseEntries, hasLength(1));
     });
 
     test('a rejected file leaves the current data untouched', () async {

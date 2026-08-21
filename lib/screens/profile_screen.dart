@@ -165,30 +165,50 @@ class ProfileScreen extends StatelessWidget {
           _SettingsGroup(
             title: 'Pregnancy & postpartum',
             children: [
-              _SettingTile(
-                icon: profile.isPregnant
-                    ? Icons.favorite_rounded
-                    : Icons.favorite_border_rounded,
-                label: 'Current mode',
-                value: isPostpartum
-                    ? 'Postpartum · waiting for the first period'
-                    : profile.isPregnant
-                    ? profile.dueDate == null
-                          ? 'Pregnancy · cycle estimates paused'
-                          : 'Pregnancy · due ${DateFormat.yMMMd().format(profile.dueDate!)}'
-                    : 'Period tracking · pregnancy mode is off',
-                onTap: () => _openPregnancySettings(context, profile),
+              _TrackingStatusCard(
+                profile: profile,
+                isPostpartum: isPostpartum,
+                onStartPregnancy: () => _startPregnancy(context),
+                onUpdateDueDate: () => _updateDueDate(context, profile),
+                onBabyArrived: () => _recordBirth(context, profile),
+                onTurnOffPregnancy: () => _confirmTurnOffPregnancy(context),
+                onLogFirstPeriod: () => _addPeriodDate(context),
               ),
-              if (profile.isPregnant && profile.dueDate != null)
+              if (profile.isPregnant &&
+                  profile.dueDate != null &&
+                  !isPostpartum)
                 _SettingTile(
                   icon: Icons.event_outlined,
-                  label: isPostpartum
-                      ? 'Postpartum started'
-                      : 'Expected due date',
+                  label: 'Expected due date',
                   value: DateFormat.yMMMMd().format(profile.dueDate!),
-                  onTap: isPostpartum
-                      ? null
-                      : () => _openPregnancySettings(context, profile),
+                  onTap: () => _updateDueDate(context, profile),
+                ),
+              if (profile.babyBornOn != null)
+                _SettingTile(
+                  icon: Icons.child_care,
+                  label: 'Baby born',
+                  value: DateFormat.yMMMMd().format(profile.babyBornOn!),
+                  onTap: null,
+                ),
+              if (profile.breastfeedingStartedOn != null)
+                _SettingTile(
+                  icon: Icons.child_care_outlined,
+                  label: 'Breastfeeding',
+                  value:
+                      'Since ${DateFormat.yMMMd().format(profile.breastfeedingStartedOn!)} · '
+                      'tap to record that it ended',
+                  onTap: () => _endBreastfeeding(context, profile),
+                )
+              else
+                ListTile(
+                  leading: const Icon(Icons.child_care_outlined),
+                  title: const Text('Start breastfeeding'),
+                  subtitle: const Text(
+                    'Periods often pause while breastfeeding, so dates stay '
+                    'less certain',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _startBreastfeeding(context),
                 ),
               if (profile.postpartumStartedOn != null &&
                   profile.postpartumEndedOn != null)
@@ -203,9 +223,7 @@ class ProfileScreen extends StatelessWidget {
                 ),
               for (final entry in controller.lifeStageEntries)
                 _SettingTile(
-                  icon: entry.type == LifeStageType.pregnancy
-                      ? Icons.favorite_outline_rounded
-                      : Icons.spa_outlined,
+                  icon: _iconForLifeStage(entry.type),
                   label: '${entry.type.label} history',
                   value:
                       '${DateFormat.yMMMd().format(entry.startDate)} – '
@@ -215,9 +233,9 @@ class ProfileScreen extends StatelessWidget {
                 ),
               ListTile(
                 leading: const Icon(Icons.add_circle_outline_rounded),
-                title: const Text('Add past pregnancy or postpartum'),
+                title: const Text('Add past history'),
                 subtitle: const Text(
-                  'Record a completed date range for your history',
+                  'A completed pregnancy, postpartum, or breastfeeding range',
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => _openLifeStageEditor(context),
@@ -337,7 +355,7 @@ class ProfileScreen extends StatelessWidget {
     final now = appNow();
     final profile = controller.profile!;
     final isPostpartum = profile.isPostpartumOn(now);
-    final earliest = isPostpartum ? profile.dueDate! : DateTime(1900);
+    final earliest = isPostpartum ? profile.postpartumAnchor! : DateTime(1900);
     final picked = await showDatePicker(
       context: context,
       initialDate: now,
@@ -521,21 +539,111 @@ class ProfileScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _openPregnancySettings(
-    BuildContext context,
-    UserProfile profile,
-  ) async {
-    final update = await showModalBottomSheet<_PregnancyUpdate>(
+  Future<void> _startPregnancy(BuildContext context) async {
+    final dueDate = await showModalBottomSheet<DateTime>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => _PregnancySettingsSheet(profile: profile),
+      builder: (sheetContext) => const _PregnancyStartSheet(),
     );
-    if (update == null) return;
-    await controller.setPregnancyMode(
-      enabled: update.enabled,
-      dueDate: update.dueDate,
+    if (dueDate == null) return;
+    await controller.setPregnancyMode(enabled: true, dueDate: dueDate);
+  }
+
+  Future<void> _updateDueDate(BuildContext context, UserProfile profile) async {
+    final today = appNow();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: profile.dueDate ?? today.add(const Duration(days: 140)),
+      firstDate: DateTime(1900),
+      lastDate: today.add(const Duration(days: 730)),
+      helpText: 'Expected due date',
     );
+    if (picked == null) return;
+    await controller.setPregnancyMode(enabled: true, dueDate: picked);
+  }
+
+  Future<void> _recordBirth(BuildContext context, UserProfile profile) async {
+    final record = await showModalBottomSheet<_BirthRecord>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => _BabyArrivedSheet(profile: profile),
+    );
+    if (record == null) return;
+    try {
+      await controller.recordBirth(
+        birthDate: record.birthDate,
+        breastfeeding: record.breastfeeding,
+      );
+    } on ArgumentError catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message?.toString() ?? 'Invalid date.')),
+      );
+    }
+  }
+
+  Future<void> _confirmTurnOffPregnancy(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Turn off pregnancy mode?'),
+        content: const Text(
+          'Cycle estimates resume from your last logged period. The expected '
+          'due date and the pregnancy start date are discarded; your period '
+          'history is kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Turn off'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.setPregnancyMode(enabled: false);
+  }
+
+  Future<void> _startBreastfeeding(BuildContext context) async {
+    final today = appNow();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: DateTime(1900),
+      lastDate: today,
+      helpText: 'Breastfeeding started on',
+    );
+    if (picked == null) return;
+    await controller.startBreastfeeding(picked);
+  }
+
+  Future<void> _endBreastfeeding(
+    BuildContext context,
+    UserProfile profile,
+  ) async {
+    final today = appNow();
+    final startedOn = profile.breastfeedingStartedOn!;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: startedOn,
+      lastDate: today,
+      helpText: 'Last day of breastfeeding',
+    );
+    if (picked == null) return;
+    try {
+      await controller.endBreastfeeding(picked);
+    } on ArgumentError catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message?.toString() ?? 'Invalid date.')),
+      );
+    }
   }
 
   Future<void> _openLifeStageEditor(
@@ -1086,11 +1194,12 @@ class _PassphraseDialogState extends State<_PassphraseDialog> {
 
 enum _PeriodAction { edit, editEnd, addDay, removeDay, clearEnd, delete }
 
-class _PregnancyUpdate {
-  const _PregnancyUpdate({required this.enabled, this.dueDate});
+/// What the "Baby has arrived" sheet collects in one save.
+class _BirthRecord {
+  const _BirthRecord({required this.birthDate, required this.breastfeeding});
 
-  final bool enabled;
-  final DateTime? dueDate;
+  final DateTime birthDate;
+  final bool breastfeeding;
 }
 
 enum _LifeStageEditorAction { save, delete }
@@ -1174,21 +1283,22 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
     );
   }
 
-  Widget _typeSelector() => SegmentedButton<LifeStageType>(
-    segments: const [
-      ButtonSegment(
-        value: LifeStageType.pregnancy,
-        label: Text('Pregnancy'),
-        icon: Icon(Icons.favorite_outline_rounded),
-      ),
-      ButtonSegment(
-        value: LifeStageType.postpartum,
-        label: Text('Postpartum'),
-        icon: Icon(Icons.spa_outlined),
-      ),
+  /// Choice chips rather than a segmented button: three labels — one as long
+  /// as "Breastfeeding" — do not fit across a phone-width segmented control.
+  Widget _typeSelector() => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      for (final type in LifeStageType.values)
+        ChoiceChip(
+          avatar: Icon(_iconForLifeStage(type), size: 18),
+          label: Text(type.label),
+          selected: _type == type,
+          onSelected: (selected) {
+            if (selected) setState(() => _type = type);
+          },
+        ),
     ],
-    selected: {_type},
-    onSelectionChanged: _selectType,
   );
 
   Widget _dateSelector(
@@ -1232,6 +1342,7 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
     final suggestedDays = switch (_type) {
       LifeStageType.pregnancy => 280,
       LifeStageType.postpartum => 42,
+      LifeStageType.breastfeeding => 180,
     };
     final picked = await showDatePicker(
       context: context,
@@ -1257,9 +1368,6 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
     if (picked != null) setState(() => _endDate = picked);
   }
 
-  void _selectType(Set<LifeStageType> selection) =>
-      setState(() => _type = selection.first);
-
   String _dateLabel(DateTime? date) =>
       date == null ? 'Choose a date' : DateFormat.yMMMMd().format(date);
 
@@ -1279,128 +1387,209 @@ class _LifeStageEditorSheetState extends State<_LifeStageEditorSheet> {
   }
 }
 
-class _PregnancySettingsSheet extends StatefulWidget {
-  const _PregnancySettingsSheet({required this.profile});
+/// The status card at the top of the Pregnancy & postpartum section.
+///
+/// It answers "what is the app doing right now?" in one line and offers only
+/// the actions that make sense in that state.
+class _TrackingStatusCard extends StatelessWidget {
+  const _TrackingStatusCard({
+    required this.profile,
+    required this.isPostpartum,
+    required this.onStartPregnancy,
+    required this.onUpdateDueDate,
+    required this.onBabyArrived,
+    required this.onTurnOffPregnancy,
+    required this.onLogFirstPeriod,
+  });
 
   final UserProfile profile;
-
-  @override
-  State<_PregnancySettingsSheet> createState() =>
-      _PregnancySettingsSheetState();
-}
-
-class _PregnancySettingsSheetState extends State<_PregnancySettingsSheet> {
-  late bool _enabled;
-  DateTime? _dueDate;
-
-  @override
-  void initState() {
-    super.initState();
-    _enabled = widget.profile.isPregnant;
-    _dueDate = widget.profile.dueDate;
-  }
+  final bool isPostpartum;
+  final VoidCallback onStartPregnancy;
+  final VoidCallback onUpdateDueDate;
+  final VoidCallback onBabyArrived;
+  final VoidCallback onTurnOffPregnancy;
+  final VoidCallback onLogFirstPeriod;
 
   @override
   Widget build(BuildContext context) {
-    final isPostpartum = widget.profile.isPostpartumOn(appNow());
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              isPostpartum ? 'Postpartum tracking' : 'Pregnancy mode',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isPostpartum
-                  ? 'Cycle estimates stay paused until the first real period after pregnancy is logged.'
-                  : 'Pause period and ovulation estimates while keeping your cycle history safe.',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                height: 1.4,
+    final postpartumSince =
+        profile.postpartumStartedOn ?? profile.postpartumAnchor;
+    final headline = isPostpartum
+        ? 'Postpartum · since ${DateFormat.yMMMd().format(postpartumSince!)}'
+        : profile.isPregnant
+        ? profile.dueDate == null
+              ? 'Pregnant'
+              : 'Pregnant · due ${DateFormat.yMMMd().format(profile.dueDate!)}'
+        : 'Period tracking active';
+    final explanation = isPostpartum
+        ? 'Cycle estimates stay paused until you log the first period after '
+              'pregnancy. Postpartum bleeding is not necessarily a period.'
+        : profile.isPregnant
+        ? 'Period logging and cycle estimates are paused. Your cycle history '
+              'stays on this device.'
+        : 'Period and ovulation estimates run from the dates you log.';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isPostpartum
+                    ? Icons.spa_outlined
+                    : profile.isPregnant
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                color: Theme.of(context).colorScheme.primary,
               ),
-            ),
-            const SizedBox(height: 14),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                isPostpartum ? 'Postpartum mode is active' : 'I am pregnant',
-              ),
-              subtitle: Text(
-                isPostpartum && _enabled
-                    ? 'Waiting for the first postpartum period'
-                    : _enabled
-                    ? 'Cycle estimates will be paused'
-                    : 'Period tracking is active',
-              ),
-              value: _enabled,
-              onChanged: isPostpartum
-                  ? null
-                  : (value) => setState(() => _enabled = value),
-            ),
-            if (isPostpartum)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8),
+              const SizedBox(width: 10),
+              Expanded(
                 child: Text(
-                  'Postpartum mode ends automatically when you log your first period.',
+                  headline,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
-            if (_enabled)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.event_outlined),
-                title: const Text('Expected due date'),
-                subtitle: Text(
-                  _dueDate == null
-                      ? 'Not added'
-                      : DateFormat.yMMMMd().format(_dueDate!),
-                ),
-                trailing: const Icon(Icons.edit_calendar_outlined),
-                onTap: isPostpartum ? null : _pickDueDate,
-              ),
-            if (_enabled && _dueDate == null)
-              Text(
-                'Add a due date so Postpartum mode can start automatically.',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            if (_enabled && _dueDate != null && !isPostpartum)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: () => setState(() => _dueDate = null),
-                  icon: const Icon(Icons.close_rounded),
-                  label: const Text('Remove due date'),
-                ),
-              ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: _enabled && _dueDate == null
-                    ? null
-                    : () => Navigator.pop(
-                        context,
-                        isPostpartum
-                            ? null
-                            : _PregnancyUpdate(
-                                enabled: _enabled,
-                                dueDate: _enabled ? _dueDate : null,
-                              ),
-                      ),
-                child: Text(isPostpartum ? 'Close' : 'Save tracking status'),
-              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            explanation,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              height: 1.4,
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+          ..._actions(),
+        ],
       ),
     );
   }
+
+  List<Widget> _actions() {
+    if (isPostpartum) {
+      return [
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onLogFirstPeriod,
+            icon: const Icon(Icons.water_drop_outlined),
+            label: const Text('Log first period'),
+          ),
+        ),
+      ];
+    }
+    if (profile.isPregnant) {
+      return [
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onBabyArrived,
+            icon: const Icon(Icons.child_care),
+            label: const Text('Baby has arrived'),
+          ),
+        ),
+        // Wrap rather than Row: both labels side by side need more width than
+        // a narrow phone has.
+        Wrap(
+          children: [
+            TextButton(
+              onPressed: onUpdateDueDate,
+              child: const Text('Update due date'),
+            ),
+            TextButton(
+              onPressed: onTurnOffPregnancy,
+              child: const Text('Turn off pregnancy mode'),
+            ),
+          ],
+        ),
+      ];
+    }
+    return [
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: onStartPregnancy,
+          icon: const Icon(Icons.favorite_rounded),
+          label: const Text("I'm pregnant"),
+        ),
+      ),
+    ];
+  }
+}
+
+/// Turns pregnancy mode on: what it pauses, plus the required due date.
+class _PregnancyStartSheet extends StatefulWidget {
+  const _PregnancyStartSheet();
+
+  @override
+  State<_PregnancyStartSheet> createState() => _PregnancyStartSheetState();
+}
+
+class _PregnancyStartSheetState extends State<_PregnancyStartSheet> {
+  DateTime? _dueDate;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "I'm pregnant",
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Turning this on pauses period logging, cycle estimates, and phase '
+            'reminders. Your history is kept, and everything resumes when you '
+            'log your first period afterwards.',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.event_outlined),
+            title: const Text('Expected due date'),
+            subtitle: Text(
+              _dueDate == null
+                  ? 'Required · DD/MM/YYYY'
+                  : DateFormat.yMMMMd().format(_dueDate!),
+            ),
+            trailing: const Icon(Icons.edit_calendar_outlined),
+            onTap: _pickDueDate,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'This mode records a tracking preference. It does not confirm or '
+            'monitor a pregnancy.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _dueDate == null
+                  ? null
+                  : () => Navigator.pop(context, _dueDate),
+              child: const Text('Save'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Future<void> _pickDueDate() async {
     final today = appNow();
@@ -1412,6 +1601,104 @@ class _PregnancySettingsSheetState extends State<_PregnancySettingsSheet> {
       helpText: 'Expected due date',
     );
     if (picked != null) setState(() => _dueDate = picked);
+  }
+}
+
+/// Records the real birth date and, by default, that breastfeeding started.
+class _BabyArrivedSheet extends StatefulWidget {
+  const _BabyArrivedSheet({required this.profile});
+
+  final UserProfile profile;
+
+  @override
+  State<_BabyArrivedSheet> createState() => _BabyArrivedSheetState();
+}
+
+class _BabyArrivedSheetState extends State<_BabyArrivedSheet> {
+  late DateTime _birthDate;
+  bool _breastfeeding = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _birthDate = _day(appNow());
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Baby has arrived',
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Postpartum tracking starts on the day of birth instead of the '
+            'expected due date. Cycle estimates stay paused until you log '
+            'your first period.',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.child_care),
+            title: const Text('Birth date'),
+            subtitle: Text(DateFormat.yMMMMd().format(_birthDate)),
+            trailing: const Icon(Icons.edit_calendar_outlined),
+            onTap: _pickBirthDate,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text("I'm breastfeeding"),
+            subtitle: const Text(
+              'Periods often stay away for months while breastfeeding, so '
+              'estimates stay cautious',
+            ),
+            value: _breastfeeding,
+            onChanged: (value) => setState(() => _breastfeeding = value),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => Navigator.pop(
+                context,
+                _BirthRecord(
+                  birthDate: _birthDate,
+                  breastfeeding: _breastfeeding,
+                ),
+              ),
+              child: const Text('Save'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Future<void> _pickBirthDate() async {
+    final today = _day(appNow());
+    final pregnancyStart = widget.profile.pregnancyStartedOn;
+    final earliest = pregnancyStart == null
+        ? DateTime(1900)
+        : _day(pregnancyStart);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _birthDate,
+      firstDate: earliest.isAfter(today) ? today : earliest,
+      lastDate: today,
+      helpText: 'Birth date',
+    );
+    if (picked != null) setState(() => _birthDate = picked);
   }
 }
 
@@ -1629,5 +1916,12 @@ class _SettingTile extends StatelessWidget {
     onTap: onTap,
   );
 }
+
+IconData _iconForLifeStage(LifeStageType lifeStageType) =>
+    switch (lifeStageType) {
+      LifeStageType.pregnancy => Icons.favorite_outline_rounded,
+      LifeStageType.postpartum => Icons.spa_outlined,
+      LifeStageType.breastfeeding => Icons.child_care_outlined,
+    };
 
 DateTime _day(DateTime date) => DateTime(date.year, date.month, date.day);

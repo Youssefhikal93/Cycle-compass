@@ -49,9 +49,13 @@ UserProfile + calendar-history models
    then loads the saved profile and calendar history.
 3. `CycleCompassApp` listens to the controller.
 4. If no profile exists, the app shows onboarding. If a profile exists, it
-   shows the four-tab home shell.
-5. The home shell keeps Today, Calendar, Learn, and Profile alive in an
+   shows the home shell.
+5. The home shell keeps Today, Calendar, and Profile alive in an
    `IndexedStack`, so switching tabs does not recreate each tab's local state.
+   The Learn tab is hidden behind the `showLearnTab` constant in
+   `home_shell.dart`; flipping it back to `true` restores the fourth tab
+   without touching `learn_screen.dart`. Tab indexes are derived from the built
+   destination list, so nothing hard-codes a position.
 
 ## State and data flow
 
@@ -81,7 +85,7 @@ is used by widget tests and golden previews.
 
 ## Persistence model
 
-The database is currently schema version 7 and contains four tables:
+The database is currently schema version 8 and contains four tables:
 
 ### `profile`
 
@@ -90,6 +94,10 @@ A single row with `id = 1`. It stores:
 - name, date of birth, and optional managed avatar path;
 - latest period start, configured cycle length, and configured period length;
 - pregnancy flag, pregnancy start, and expected pregnancy due date;
+- `baby_born_on`: the recorded birth date, which replaces the due date as the
+  postpartum anchor once it exists;
+- `breastfeeding_started_on`: set while breastfeeding is active, cleared when it
+  is ended (the finished range then lives in `life_stage_entries`);
 - the theme preference (system, light, or dark);
 - a retained-but-unused `next_period_due_date` column (the manual override
   feature was removed; old backups containing it still restore);
@@ -105,19 +113,38 @@ estimate. The `source` column currently defaults to `user`.
 
 ### `daily_logs`
 
-Stores one optional protected/unprotected intercourse status per date. The
-existing flow, pain, mood, energy, and note columns remain available for future
-daily tracking.
+One row per day that carries any per-day entry:
+
+- `intercourse_protection`: one optional protected/unprotected status;
+- `ovulation_test`: one optional `positive`/`negative` test result;
+- the existing flow, pain, mood, energy, and note columns remain available for
+  future daily tracking.
+
+Because several kinds of entry share a row, deleting one clears only its own
+column and then removes the row **only** when every payload column is null.
+`_dailyLogPayloadColumns` is the single list both delete paths build that
+condition from, so adding a future column cannot make one entry delete another.
 
 ### `life_stage_entries`
 
-Stores completed pregnancy and postpartum history ranges. Each row has a stage
-type plus inclusive start and end dates. Ranges cannot overlap, and completed
-history cannot end in the future.
+Stores completed pregnancy, postpartum, and breastfeeding history ranges. Each
+row has a stage type plus inclusive start and end dates, and completed history
+cannot end in the future. Pregnancy and postpartum ranges cannot overlap each
+other; breastfeeding is only checked against other breastfeeding ranges,
+because breastfeeding genuinely runs alongside postpartum.
 
 All stored cycle dates use `YYYY-MM-DD` text. The database upgrade callback adds
-pregnancy, postpartum, intercourse, notification, and theme columns for older
-users, and creates `life_stage_entries` when needed.
+pregnancy, postpartum, intercourse, notification, theme, birth-date,
+breastfeeding, and ovulation-test columns for older users, and creates
+`life_stage_entries` when needed. `createAppSchema` and `upgradeAppSchema` are
+top-level functions so a test can run the real migration against a desktop
+SQLite factory.
+
+`test/app_database_test.dart` uses the `sqflite_common_ffi` dev dependency to
+build a real version-7 database, reopen it at the current version, and check
+that the rows survive and the added columns are writable. It also covers the
+`daily_logs` sharing rule directly against SQLite. That package is a
+dev dependency only; the app itself still ships plain `sqflite`.
 
 ## Backup file format
 
@@ -150,6 +177,10 @@ Restore safety rules, enforced by `BackupCodec` before anything is written:
 - every row is validated column by column: unknown columns are dropped, enum
   columns must hold known values, dates must parse, and duplicate
   `start_date`/`log_date`/`id` keys are rejected up front;
+- columns added by a later schema are optional on read, so a backup written
+  before schema 8 restores with `baby_born_on`, `breastfeeding_started_on`, and
+  `ovulation_test` left null;
+- estimated periods are derived state and never appear in a backup file;
 - a wrong passphrase and a tampered file both fail GCM authentication and
   surface as one retryable passphrase error;
 - the database import replaces all four tables in a single transaction, so a
@@ -180,6 +211,30 @@ length and labels a start as early, late, or matching the expected day. It also
 flags intervals outside the commonly described 21–35-day adult range so the UI
 can show cautious guidance.
 
+### Estimated periods for missed logs
+
+`CycleCalculator.estimatedPeriodStarts()` steps the estimated cycle length
+forward from the newest recorded start and returns every expected start up to
+and including a `through` date (always today), so an estimate is never placed in
+the future. `AppController.estimatedPeriodEntries` wraps each start in a
+`PeriodEntry` spanning the usual period length.
+
+Those entries are **derived on every read**. They are never written to SQLite,
+never part of `periodStarts` or `periodEntries`, never exported in a backup, and
+never fed into `estimatedCycleLength` or `insightsForMonth` — cycle statistics
+stay based on real logged dates only. The getter returns nothing at all while
+pregnancy, postpartum, or breastfeeding is active, because a missing period is
+expected in those states.
+
+The Calendar paints estimated period days with a fainter fill than recorded ones
+and a hollow ring instead of the solid start dot. More broadly, any day whose
+snapshot basis is not `recordedCycle` is marked `isEstimated` and painted at
+roughly half the usual phase alpha, with a "Faint colors = estimated" legend
+hint. Tapping an estimated period day offers three honest answers: confirm it
+(logs the estimated start), adjust the date (a picker capped at today), or close
+the sheet and leave the estimate alone. Logging any real period recomputes every
+estimate automatically.
+
 ## Pregnancy and postpartum lifecycle
 
 Pregnancy and postpartum are one coupled tracking flow:
@@ -190,8 +245,9 @@ Normal cycle tracking
         ▼
 Pregnancy mode
   - period and phase estimates paused
-  - period logging disabled before due date
-        │ current date reaches expected due date
+  - period logging disabled before the postpartum anchor
+        │ "Baby has arrived" records the real birth date,
+        │ or the current date reaches the expected due date
         ▼
 Postpartum mode (derived automatically)
   - estimates remain paused
@@ -205,9 +261,62 @@ Normal cycle tracking resumes
 ```
 
 The persisted `isPregnant` flag remains true through active postpartum
-tracking. `UserProfile.isPostpartumOn(date)` derives whether the due date has
-arrived. This means no background job or database migration is needed at
-midnight; the next rebuild derives the correct mode from the current date.
+tracking. `UserProfile.postpartumAnchor` is `babyBornOn ?? dueDate`, and
+`isPostpartumOn(date)` derives whether that anchor has arrived. This means no
+background job or database migration is needed at midnight; the next rebuild
+derives the correct mode from the current date.
+
+Recording a birth (`AppController.recordBirth`) sets `babyBornOn` and
+`postpartumStartedOn` to the real birth date, keeps `isPregnant` true, and — when
+the sheet's breastfeeding switch is on — starts breastfeeding on the same day.
+The birth date must fall between `pregnancyStartedOn` and today; the picker uses
+the same bounds, so the UI cannot produce a rejected value. Consequences of a
+recorded birth date:
+
+- pregnancy calendar coloring stops at the birth date instead of the due date;
+- period logging opens from the birth date;
+- the calendar's baby marker moves from the expected due date to the birth date,
+  and its legend label changes from "Expected due date" to "Baby born";
+- `setPregnancyMode` clears `babyBornOn` in both directions, so turning the mode
+  off, or starting a new pregnancy, always begins from an expected due date.
+
+Anyone who never logs the arrival keeps the previous behavior exactly: the due
+date remains the anchor and the automatic transition still happens.
+
+## Breastfeeding
+
+Breastfeeding is a single profile date (`breastfeedingStartedOn`) that runs until
+`AppController.endBreastfeeding` writes the finished range into
+`life_stage_entries` as a `breastfeeding` entry and clears the field. Both ends
+are validated: an end cannot precede the start, and neither may be in the
+future.
+
+Breastfeeding deliberately behaves differently from pregnancy and postpartum:
+
+- it **never** colors calendar days and never suppresses phase colors, because
+  periods can and do happen while breastfeeding. `_lifeStageTypeOn` skips
+  breastfeeding entries for exactly this reason;
+- it does suspend estimated periods, since a missing period is expected;
+- the Calendar shows a "Breastfeeding · since {date}" chip above the month grid;
+- the month summary always explains that periods often stay away for months
+  (lactational amenorrhoea) and that dates are less reliable. If a period
+  returned during breastfeeding and nothing has been logged for 60 days, it adds
+  the reassurance that cycles often stop and restart. If no period has been
+  logged at all for more than a year, it offers the usual "consider talking with
+  a healthcare professional" wording.
+
+## Ovulation tests
+
+`OvulationTestEntry` records one `positive`/`negative` result per day in
+`daily_logs.ovulation_test`. Results are reference information only: no
+calculator, phase, reminder, or estimate reads them, so recording a test never
+moves a prediction. The Calendar marks them at the top-right of a day cell
+(sex stays at the top-left), and the month summary compares each positive test
+with that cycle's estimated ovulation day — for example "Positive ovulation test
+on 14 March, 2 days before the estimated ovulation day" — while a negative-only
+month gets one quiet count line. Test results are allowed during pregnancy too:
+they are harmless there, and one consistent rule is simpler to explain than a
+mode-dependent one.
 
 `UserProfile.isPostpartumDate()` supplies the historical/active postpartum date
 range used by the Calendar. The first new period day is excluded from the brown
@@ -217,8 +326,9 @@ color.
 Synchronization rules are enforced in `AppController`, not only in the UI:
 
 - pregnancy mode cannot be enabled without an expected due date;
-- a period cannot be logged before that due date while pregnancy is active;
-- logging the first period on or after the due date ends postpartum tracking;
+- a period cannot be logged before the postpartum anchor while pregnancy is
+  active;
+- logging the first period on or after the anchor ends postpartum tracking;
 - editing that first period also updates `postpartumEndedOn`;
 - deleting that first period reopens postpartum mode;
 - moving the first postpartum period before the postpartum start is rejected.
@@ -258,7 +368,12 @@ This is the best place for application-wide initialization and theme changes.
 The central state coordinator and mutation API.
 
 - Holds the current `UserProfile` and an immutable public view of period
-  entries, intercourse entries, and completed life-stage ranges.
+  entries, intercourse entries, ovulation tests, and completed life-stage
+  ranges.
+- Derives `estimatedPeriodEntries` for months with no logged period, suspended
+  during pregnancy, postpartum, and breastfeeding.
+- Records a birth date (`recordBirth`) and starts/ends breastfeeding.
+- Adds or replaces one ovulation test result per date.
 - Loads and persists data through `AppDatabase`.
 - Completes onboarding and creates the initial period entry.
 - Adds, edits, deletes, and adjusts period ranges.
@@ -286,12 +401,17 @@ inside a screen.
 
 The SQLite adapter.
 
-- Opens `cycle_compass.db` at schema version 7.
+- Opens `cycle_compass.db` at schema version 8 (`appDatabaseVersion`).
 - Creates and upgrades the `profile`, `period_entries`, `daily_logs`, and
-  `life_stage_entries` tables.
+  `life_stage_entries` tables through the top-level `createAppSchema` and
+  `upgradeAppSchema` functions, which tests drive directly.
+- `AppDatabase.of(database)` wraps an already-open database, so the same queries
+  can run against a desktop SQLite factory in tests.
 - Reads and replaces the single profile row.
 - Inserts, updates, and deletes period entries.
-- Reads and writes intercourse entries in `daily_logs`.
+- Reads and writes intercourse entries and ovulation tests in `daily_logs`,
+  sharing `_saveDailyLog` and `_clearDailyLogColumn` so one kind of entry can
+  never delete another on the same day.
 - Inserts, updates, reads, and deletes `life_stage_entries`.
 - Uses a transaction when moving a period start so a compatible end date is
   preserved.
@@ -305,11 +425,13 @@ SQL details and future schema migrations belong in this file.
 
 The immutable profile and tracking-status model.
 
-- Stores personal data, cycle defaults, pregnancy fields, the user-entered
-  postpartum tracking dates, notification preference, and theme preference
-  (stored as text, exposed as Flutter's `ThemeMode`).
-- Derives active postpartum state and whether a calendar date belongs to the
-  postpartum range.
+- Stores personal data, cycle defaults, pregnancy fields, the recorded birth
+  date, the user-entered postpartum tracking dates, the breastfeeding start
+  date, notification preference, and theme preference (stored as text, exposed
+  as Flutter's `ThemeMode`).
+- Derives `postpartumAnchor` (recorded birth date, else expected due date),
+  active postpartum state, whether a calendar date belongs to the postpartum
+  range, and whether breastfeeding is active on a date.
 - Provides `copyWith`; nullable fields use a sentinel so callers can distinguish
   “leave unchanged” from “set to null.”
 - Generates initials and maps the object to/from SQLite rows.
@@ -328,10 +450,18 @@ A small immutable model for one bleeding record.
 Defines protected and unprotected statuses and one date-based intercourse
 entry. The status extension supplies the displayed label and SQLite value.
 
+### `lib/models/ovulation_test_entry.dart`
+
+Defines positive and negative ovulation test results and one date-based test
+entry, mirroring `intercourse_entry.dart`. The result extension supplies the
+displayed label and SQLite value.
+
 ### `lib/models/life_stage_entry.dart`
 
-Defines pregnancy and postpartum history types plus an inclusive completed
-date range. Entries carry their SQLite ID after they are saved.
+Defines pregnancy, postpartum, and breastfeeding history types plus an inclusive
+completed date range. Entries carry their SQLite ID after they are saved.
+`overlapsAllowedWith` encodes the one asymmetry: breastfeeding may overlap
+pregnancy and postpartum ranges, but not another breastfeeding range.
 
 ### `lib/services/cycle_calculator.dart`
 
@@ -342,7 +472,8 @@ The pure cycle-estimation domain service.
   next period, estimated ovulation, and confidence basis.
 - `CycleIntervalInsight` describes early/late comparisons and range warnings.
 - `CycleCalculator` handles recorded cycles, median history estimates, phase
-  assignment, negative-date rollover, normalization, and monthly insights.
+  assignment, negative-date rollover, normalization, monthly insights, and the
+  expected-but-unlogged period starts behind estimated periods.
 
 It has no Flutter widgets, database access, or mutable state, so it is directly
 unit-testable.
@@ -401,8 +532,10 @@ The two-step first-run flow.
 The post-onboarding navigation container.
 
 - Owns the selected bottom-navigation index.
-- Displays Today, Calendar, Learn, and Profile in an `IndexedStack`.
-- Lets Today open Profile by changing the selected index.
+- Displays Today, Calendar, and Profile in an `IndexedStack`; the Learn tab is
+  built only when `showLearnTab` is true, which it currently is not.
+- Lets Today open Profile by changing the selected index, derived from the built
+  destination list rather than hard-coded.
 - Explains and requests Android notification permission when default-on
   reminders do not yet have permission.
 
@@ -421,9 +554,10 @@ In normal tracking mode it:
 
 When `profile.isPregnant` is true, it switches to `_PregnancyTodayView`:
 
-- before the due date it displays Pregnancy mode and pauses estimates;
-- on/after the due date it displays Postpartum mode and offers a date picker
-  for the first real postpartum period;
+- before the postpartum anchor it displays Pregnancy mode and pauses estimates;
+- on/after the anchor it displays Postpartum mode and offers a date picker for
+  the first real postpartum period, wording the anchor as a recorded birth date
+  when there is one;
 - it includes safety copy distinguishing postpartum bleeding from menstruation.
 
 This file also owns the phase color and icon helpers shared by Learn and
@@ -436,25 +570,35 @@ The month grid, date-management UI, and month explanation layer.
 - Navigates between months with the arrow buttons, a horizontal swipe, or a
   tap on the month title, which opens month/year scroll wheels, and
   shows a jump-back-to-current-month button when another month is displayed.
-- Calculates each cell's phase.
-- Opens one day editor for protected/unprotected sex and period actions.
+- Calculates each cell's phase and whether that phase is estimated.
+- Opens one day editor for protected/unprotected sex, ovulation test results,
+  estimated-period confirmation, and period actions.
 - Uses explicit period ranges before estimated bleeding lengths.
 - Marks period starts, today, and recorded bleeding days, and shows a baby
-  icon on the expected pregnancy due date.
-- Pauses phase coloring during pregnancy.
-- Colors postpartum days muted brown and gives the expected pregnancy due date
-  a matching outline.
+  icon on the expected due date until a recorded birth date replaces it.
+- Paints estimated period days and estimated phase days at reduced alpha
+  (`_fillAlpha`), draws a hollow ring instead of the solid start dot for an
+  estimated start, and fades the ovulation flower on estimated days.
+- Pauses phase coloring during pregnancy, but never for breastfeeding.
+- Colors postpartum days muted brown and gives the marked baby day a matching
+  outline.
 - Colors completed pregnancy and postpartum history ranges and marks intercourse
-  entries with distinct icons.
+  entries (top-left) and ovulation tests (top-right) with distinct icons.
+- Shows a breastfeeding chip above the month grid while it is active.
 - Adds/manages period starts and recorded end dates from dialogs and bottom
   sheets, including “add one more day.”
 - Shows legends and a monthly summary for early/late intervals, duration
-  differences, and cautious range guidance. A legend appears
-  only when its phase or event occurs in the displayed month.
+  differences, estimated periods, breastfeeding context, ovulation test results,
+  and cautious range guidance. A legend appears only when its phase or event
+  occurs in the displayed month.
+- New colors follow the existing dark-safe helper pattern (`_positiveTestColor`,
+  `_negativeTestColor`) rather than hard-coding one value for both themes.
 
 ### `lib/screens/learn_screen.dart`
 
-Static educational content for the four commonly described cycle stages.
+Static educational content for the four commonly described cycle stages. It is
+currently unreachable from the UI because `showLearnTab` is false, and is kept
+intact for when the content returns.
 
 - Uses expandable cards for menstruation, follicular, ovulation, and luteal
   information.
@@ -471,11 +615,18 @@ The complete local-data management screen.
 - Shows the automatically derived next-period date as read-only information.
 - Offers the theme preference (System / Light / Dark) in an Appearance group.
 - Lets the user turn all phase and mode-change reminders on or off.
-- Groups pregnancy and postpartum settings in one coupled section.
-- Adds, edits, and deletes completed pregnancy or postpartum history ranges in
-  that section without changing current mode.
-- Requires a pregnancy due date, shows the derived current mode, and preserves
-  previous postpartum tracking dates.
+- Groups pregnancy, postpartum, and breastfeeding settings in one coupled
+  section, headed by a status card that states the current mode in one line and
+  offers only the actions that fit it: "I'm pregnant" when tracking normally;
+  "Baby has arrived", "Update due date", and a confirmed "Turn off pregnancy
+  mode" while pregnant; "Log first period" while postpartum.
+- Collects the required due date in one sheet that explains what pauses, and the
+  birth date plus a default-on breastfeeding switch in another.
+- Starts and ends breastfeeding, which files the finished range as history.
+- Adds, edits, and deletes completed pregnancy, postpartum, or breastfeeding
+  history ranges in that section without changing current mode. The type
+  selector uses choice chips because three labels do not fit a phone-width
+  segmented button.
 - Lists recent period entries and supports adding, moving, deleting, extending,
   shortening, or clearing an explicit bleeding end date.
 - Exports and imports backups: the export sheet encrypts with a passphrase by
@@ -512,6 +663,8 @@ Shared avatar presentation and local image management.
 | Add a persisted profile field | model, `app_database.dart`, controller, migration |
 | Add a calendar history type | model, `app_database.dart`, controller, Calendar and Profile |
 | Change cycle math | `services/cycle_calculator.dart` and unit tests |
+| Change estimated-period rules | `cycle_calculator.dart`, `AppController.estimatedPeriodEntries`, Calendar rendering |
+| Add a per-day entry type | `daily_logs` column, `_dailyLogPayloadColumns`, model, controller, day editor, backup codec |
 | Change the backup format | `services/backup_codec.dart`, bump `backupFormatVersion`, unit tests |
 | Change backup sharing/picking | `services/backup_service.dart` |
 | Change pregnancy/postpartum rules | `user_profile.dart`, `app_controller.dart`, relevant screens |
@@ -526,8 +679,16 @@ Shared avatar presentation and local image management.
 
 - All calculations are estimates and should not be used as contraception,
   diagnosis, or confirmation of ovulation or pregnancy.
+- Estimated periods are labelled as estimates in the calendar, the legend, and
+  the month summary, and are always correctable by the person using the app.
+- Ovulation test results are stored and described, never used to move a
+  prediction. A positive test is reported next to the estimate, not merged
+  into it.
+- Breastfeeding wording follows the ACOG/NHS-style neutral tone: periods often
+  pause, a returning-then-stopping cycle is usually normal, and anything worth
+  reviewing is phrased as "consider talking with a healthcare professional".
 - Pregnancy mode records a user preference; it does not verify or monitor a
-  pregnancy.
+  pregnancy. A recorded birth date is a tracking anchor, not a medical record.
 - “Postpartum mode ended” means app tracking resumed after a recorded period;
   it does not mean clinical postpartum recovery has ended.
 - Medical wording should receive qualified clinical review before public

@@ -29,8 +29,10 @@ class UserProfile {
     this.isPregnant = false,
     this.pregnancyStartedOn,
     this.dueDate,
+    this.babyBornOn,
     this.postpartumStartedOn,
     this.postpartumEndedOn,
+    this.breastfeedingStartedOn,
     this.notificationsEnabled = true,
     this.themeMode = ThemeMode.system,
   });
@@ -44,25 +46,40 @@ class UserProfile {
   final bool isPregnant;
   final DateTime? pregnancyStartedOn;
   final DateTime? dueDate;
+
+  /// The recorded day the baby arrived, when the person logged it.
+  ///
+  /// Null while a pregnancy is still expected, which keeps the expected due
+  /// date as the automatic postpartum trigger for anyone who never logs the
+  /// arrival.
+  final DateTime? babyBornOn;
   final DateTime? postpartumStartedOn;
   final DateTime? postpartumEndedOn;
+
+  /// The day breastfeeding started, or null when it is not active.
+  ///
+  /// Breastfeeding runs until it is explicitly ended, at which point the range
+  /// moves into the life-stage history.
+  final DateTime? breastfeedingStartedOn;
   final bool notificationsEnabled;
   final ThemeMode themeMode;
 
+  /// The day postpartum tracking is anchored to.
+  ///
+  /// A recorded birth date always wins over the expected due date, so the
+  /// calendar and the pickers follow what actually happened.
+  DateTime? get postpartumAnchor => babyBornOn ?? dueDate;
+
   bool isPostpartumOn(DateTime date) {
-    final expectedDueDate = dueDate;
-    if (!isPregnant || expectedDueDate == null) return false;
+    final anchorDate = postpartumAnchor;
+    if (!isPregnant || anchorDate == null) return false;
     final day = DateTime(date.year, date.month, date.day);
-    final due = DateTime(
-      expectedDueDate.year,
-      expectedDueDate.month,
-      expectedDueDate.day,
-    );
-    return !day.isBefore(due);
+    final anchor = DateTime(anchorDate.year, anchorDate.month, anchorDate.day);
+    return !day.isBefore(anchor);
   }
 
   bool isPostpartumDate(DateTime date, {DateTime? through}) {
-    final startedOn = postpartumStartedOn ?? dueDate;
+    final startedOn = postpartumStartedOn ?? postpartumAnchor;
     if (startedOn == null) return false;
 
     final day = DateTime(date.year, date.month, date.day);
@@ -77,10 +94,22 @@ class UserProfile {
       return day.isBefore(end);
     }
 
-    if (!isPregnant || dueDate == null) return false;
+    if (!isPregnant || postpartumAnchor == null) return false;
     final limitDate = through ?? appNow();
     final limit = DateTime(limitDate.year, limitDate.month, limitDate.day);
     return !day.isAfter(limit);
+  }
+
+  /// Whether breastfeeding is recorded as active on [date].
+  ///
+  /// Periods can and do happen while breastfeeding, so this never suppresses
+  /// cycle coloring; it only relaxes how confident the wording is.
+  bool isBreastfeedingOn(DateTime date) {
+    final startedOn = breastfeedingStartedOn;
+    if (startedOn == null) return false;
+    final day = DateTime(date.year, date.month, date.day);
+    final start = DateTime(startedOn.year, startedOn.month, startedOn.day);
+    return !day.isBefore(start);
   }
 
   UserProfile copyWith({
@@ -93,8 +122,10 @@ class UserProfile {
     bool? isPregnant,
     Object? pregnancyStartedOn = _unchanged,
     Object? dueDate = _unchanged,
+    Object? babyBornOn = _unchanged,
     Object? postpartumStartedOn = _unchanged,
     Object? postpartumEndedOn = _unchanged,
+    Object? breastfeedingStartedOn = _unchanged,
     bool? notificationsEnabled,
     ThemeMode? themeMode,
   }) => UserProfile(
@@ -113,12 +144,18 @@ class UserProfile {
     dueDate: identical(dueDate, _unchanged)
         ? this.dueDate
         : dueDate as DateTime?,
+    babyBornOn: identical(babyBornOn, _unchanged)
+        ? this.babyBornOn
+        : babyBornOn as DateTime?,
     postpartumStartedOn: identical(postpartumStartedOn, _unchanged)
         ? this.postpartumStartedOn
         : postpartumStartedOn as DateTime?,
     postpartumEndedOn: identical(postpartumEndedOn, _unchanged)
         ? this.postpartumEndedOn
         : postpartumEndedOn as DateTime?,
+    breastfeedingStartedOn: identical(breastfeedingStartedOn, _unchanged)
+        ? this.breastfeedingStartedOn
+        : breastfeedingStartedOn as DateTime?,
     notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
     themeMode: themeMode ?? this.themeMode,
   );
@@ -147,12 +184,16 @@ class UserProfile {
         ? null
         : _dateOnly(pregnancyStartedOn!),
     'due_date': dueDate == null ? null : _dateOnly(dueDate!),
+    'baby_born_on': babyBornOn == null ? null : _dateOnly(babyBornOn!),
     'postpartum_started_on': postpartumStartedOn == null
         ? null
         : _dateOnly(postpartumStartedOn!),
     'postpartum_ended_on': postpartumEndedOn == null
         ? null
         : _dateOnly(postpartumEndedOn!),
+    'breastfeeding_started_on': breastfeedingStartedOn == null
+        ? null
+        : _dateOnly(breastfeedingStartedOn!),
     'notifications_enabled': notificationsEnabled ? 1 : 0,
     'theme_mode': themeMode.storageValue,
   };
@@ -167,8 +208,10 @@ class UserProfile {
     isPregnant: (map['is_pregnant'] as int? ?? 0) == 1,
     pregnancyStartedOn: _optionalDate(map['pregnancy_started_on']),
     dueDate: _optionalDate(map['due_date']),
+    babyBornOn: _optionalDate(map['baby_born_on']),
     postpartumStartedOn: _optionalDate(map['postpartum_started_on']),
     postpartumEndedOn: _optionalDate(map['postpartum_ended_on']),
+    breastfeedingStartedOn: _optionalDate(map['breastfeeding_started_on']),
     notificationsEnabled: (map['notifications_enabled'] as int? ?? 1) == 1,
     themeMode: themeModeFromStorage(map['theme_mode']),
   );

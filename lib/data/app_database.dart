@@ -3,12 +3,34 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/intercourse_entry.dart';
 import '../models/life_stage_entry.dart';
+import '../models/ovulation_test_entry.dart';
 import '../models/period_entry.dart';
 import '../models/user_profile.dart';
 import '../services/backup_codec.dart';
 
+/// Schema version of the local database.
+const appDatabaseVersion = 8;
+
+/// Columns of `daily_logs` that carry user data.
+///
+/// A `daily_logs` row exists only while at least one of these holds a value,
+/// so removing one kind of entry never deletes another kind on the same day.
+const _dailyLogPayloadColumns = [
+  'flow',
+  'pain',
+  'mood',
+  'energy',
+  'note',
+  'intercourse_protection',
+  'ovulation_test',
+];
+
 class AppDatabase {
-  AppDatabase._(this._database);
+  /// Wraps an already-open database.
+  ///
+  /// [open] uses it for the on-device file; tests use it to run the same
+  /// schema and queries on a desktop SQLite factory.
+  AppDatabase.of(this._database);
 
   final Database _database;
 
@@ -16,106 +38,12 @@ class AppDatabase {
     final root = await getDatabasesPath();
     final database = await openDatabase(
       p.join(root, 'cycle_compass.db'),
-      version: 7,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE profile (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            name TEXT NOT NULL,
-            date_of_birth TEXT NOT NULL,
-            avatar_path TEXT,
-            last_period_start TEXT NOT NULL,
-            cycle_length INTEGER NOT NULL,
-            period_length INTEGER NOT NULL,
-            is_pregnant INTEGER NOT NULL DEFAULT 0,
-            pregnancy_started_on TEXT,
-            due_date TEXT,
-            next_period_due_date TEXT,
-            postpartum_started_on TEXT,
-            postpartum_ended_on TEXT,
-            notifications_enabled INTEGER NOT NULL DEFAULT 1,
-            theme_mode TEXT NOT NULL DEFAULT 'system'
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE period_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            start_date TEXT NOT NULL UNIQUE,
-            end_date TEXT,
-            source TEXT NOT NULL DEFAULT 'user'
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE daily_logs (
-            log_date TEXT PRIMARY KEY,
-            flow INTEGER,
-            pain INTEGER,
-            mood INTEGER,
-            energy INTEGER,
-            note TEXT,
-            intercourse_protection TEXT
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE life_stage_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stage_type TEXT NOT NULL,
-            start_date TEXT NOT NULL,
-            end_date TEXT NOT NULL
-          )
-        ''');
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN is_pregnant INTEGER NOT NULL DEFAULT 0',
-          );
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN pregnancy_started_on TEXT',
-          );
-          await db.execute('ALTER TABLE profile ADD COLUMN due_date TEXT');
-        }
-        if (oldVersion < 3) {
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN next_period_due_date TEXT',
-          );
-        }
-        if (oldVersion < 4) {
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN postpartum_started_on TEXT',
-          );
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN postpartum_ended_on TEXT',
-          );
-        }
-        if (oldVersion < 5) {
-          await db.execute(
-            'ALTER TABLE daily_logs ADD COLUMN intercourse_protection TEXT',
-          );
-          await db.execute('''
-            CREATE TABLE life_stage_entries (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              stage_type TEXT NOT NULL,
-              start_date TEXT NOT NULL,
-              end_date TEXT NOT NULL
-            )
-          ''');
-        }
-        if (oldVersion < 6) {
-          await db.execute(
-            'ALTER TABLE profile ADD COLUMN notifications_enabled '
-            'INTEGER NOT NULL DEFAULT 1',
-          );
-        }
-        if (oldVersion < 7) {
-          await db.execute(
-            "ALTER TABLE profile ADD COLUMN theme_mode "
-            "TEXT NOT NULL DEFAULT 'system'",
-          );
-        }
-      },
+      version: appDatabaseVersion,
+      onCreate: (db, version) => createAppSchema(db),
+      onUpgrade: (db, oldVersion, newVersion) =>
+          upgradeAppSchema(db, oldVersion),
     );
-    return AppDatabase._(database);
+    return AppDatabase.of(database);
   }
 
   Future<UserProfile?> readProfile() async {
@@ -206,37 +134,71 @@ class AppDatabase {
         .toList(growable: false);
   }
 
-  Future<void> saveIntercourseEntry(IntercourseEntry entry) async {
-    final fields = {
-      'intercourse_protection': entry.protectionStatus.storageValue,
-    };
+  Future<void> saveIntercourseEntry(IntercourseEntry entry) => _saveDailyLog(
+    entry.date,
+    {'intercourse_protection': entry.protectionStatus.storageValue},
+  );
+
+  Future<void> deleteIntercourseEntry(DateTime date) =>
+      _clearDailyLogColumn(date, 'intercourse_protection');
+
+  Future<void> saveOvulationTest(OvulationTestEntry entry) =>
+      _saveDailyLog(entry.date, {'ovulation_test': entry.result.storageValue});
+
+  Future<void> deleteOvulationTest(DateTime date) =>
+      _clearDailyLogColumn(date, 'ovulation_test');
+
+  Future<List<OvulationTestEntry>> readOvulationTests() async {
+    final rows = await _database.query(
+      'daily_logs',
+      columns: ['log_date', 'ovulation_test'],
+      where: 'ovulation_test IS NOT NULL',
+      orderBy: 'log_date DESC',
+    );
+    return rows
+        .map(
+          (row) => OvulationTestEntry(
+            date: DateTime.parse(row['log_date']! as String),
+            result: ovulationTestResultFromStorage(
+              row['ovulation_test']! as String,
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Writes [fields] onto the `daily_logs` row for [date], creating it once.
+  Future<void> _saveDailyLog(DateTime date, Map<String, Object?> fields) async {
     final updated = await _database.update(
       'daily_logs',
       fields,
       where: 'log_date = ?',
-      whereArgs: [_dateOnly(entry.date)],
+      whereArgs: [_dateOnly(date)],
     );
     if (updated == 0) {
       await _database.insert('daily_logs', {
-        'log_date': _dateOnly(entry.date),
+        'log_date': _dateOnly(date),
         ...fields,
       });
     }
   }
 
-  Future<void> deleteIntercourseEntry(DateTime date) async {
+  /// Clears one `daily_logs` column and drops the row only when nothing else
+  /// is recorded for that day.
+  Future<void> _clearDailyLogColumn(DateTime date, String column) async {
     final storedDate = _dateOnly(date);
     await _database.update(
       'daily_logs',
-      {'intercourse_protection': null},
+      {column: null},
       where: 'log_date = ?',
       whereArgs: [storedDate],
     );
+    final emptyRow = _dailyLogPayloadColumns
+        .map((payloadColumn) => '$payloadColumn IS NULL')
+        .join(' AND ');
     await _database.delete(
       'daily_logs',
-      where:
-          'log_date = ? AND flow IS NULL AND pain IS NULL AND mood IS NULL '
-          'AND energy IS NULL AND note IS NULL',
+      where: 'log_date = ? AND $emptyRow',
       whereArgs: [storedDate],
     );
   }
@@ -356,6 +318,117 @@ class AppDatabase {
       await transaction.delete('period_entries');
       await transaction.delete('profile');
     });
+  }
+}
+
+/// Creates every table at the current schema version.
+Future<void> createAppSchema(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE profile (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      name TEXT NOT NULL,
+      date_of_birth TEXT NOT NULL,
+      avatar_path TEXT,
+      last_period_start TEXT NOT NULL,
+      cycle_length INTEGER NOT NULL,
+      period_length INTEGER NOT NULL,
+      is_pregnant INTEGER NOT NULL DEFAULT 0,
+      pregnancy_started_on TEXT,
+      due_date TEXT,
+      next_period_due_date TEXT,
+      baby_born_on TEXT,
+      postpartum_started_on TEXT,
+      postpartum_ended_on TEXT,
+      breastfeeding_started_on TEXT,
+      notifications_enabled INTEGER NOT NULL DEFAULT 1,
+      theme_mode TEXT NOT NULL DEFAULT 'system'
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE period_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      start_date TEXT NOT NULL UNIQUE,
+      end_date TEXT,
+      source TEXT NOT NULL DEFAULT 'user'
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE daily_logs (
+      log_date TEXT PRIMARY KEY,
+      flow INTEGER,
+      pain INTEGER,
+      mood INTEGER,
+      energy INTEGER,
+      note TEXT,
+      intercourse_protection TEXT,
+      ovulation_test TEXT
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE life_stage_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stage_type TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL
+    )
+  ''');
+}
+
+/// Brings a database created by an older app version up to date.
+///
+/// Every branch only adds columns or tables, so existing rows are preserved.
+Future<void> upgradeAppSchema(DatabaseExecutor db, int oldVersion) async {
+  if (oldVersion < 2) {
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN is_pregnant INTEGER NOT NULL DEFAULT 0',
+    );
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN pregnancy_started_on TEXT',
+    );
+    await db.execute('ALTER TABLE profile ADD COLUMN due_date TEXT');
+  }
+  if (oldVersion < 3) {
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN next_period_due_date TEXT',
+    );
+  }
+  if (oldVersion < 4) {
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN postpartum_started_on TEXT',
+    );
+    await db.execute('ALTER TABLE profile ADD COLUMN postpartum_ended_on TEXT');
+  }
+  if (oldVersion < 5) {
+    await db.execute(
+      'ALTER TABLE daily_logs ADD COLUMN intercourse_protection TEXT',
+    );
+    await db.execute('''
+      CREATE TABLE life_stage_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stage_type TEXT NOT NULL,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL
+      )
+    ''');
+  }
+  if (oldVersion < 6) {
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN notifications_enabled '
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+  }
+  if (oldVersion < 7) {
+    await db.execute(
+      "ALTER TABLE profile ADD COLUMN theme_mode "
+      "TEXT NOT NULL DEFAULT 'system'",
+    );
+  }
+  if (oldVersion < 8) {
+    await db.execute('ALTER TABLE profile ADD COLUMN baby_born_on TEXT');
+    await db.execute(
+      'ALTER TABLE profile ADD COLUMN breastfeeding_started_on TEXT',
+    );
+    await db.execute('ALTER TABLE daily_logs ADD COLUMN ovulation_test TEXT');
   }
 }
 
